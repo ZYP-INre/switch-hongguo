@@ -49,7 +49,11 @@ int main(int argc, char* argv[]) {
     // Return directly to the desktop when closing the application (only for NX)
     brls::Application::getPlatform()->exitToHomeMode(true);
 
+#ifdef HONGGUO_UI
+    brls::Application::createWindow("红果短剧");
+#else
     brls::Application::createWindow("wiliwili");
+#endif
     brls::Logger::info("createWindow done");
 
     // Register custom view\theme\style

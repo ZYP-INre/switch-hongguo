@@ -17,6 +17,21 @@ if (NOT HACBREWPACK_EXE)
 endif()
 
 project(nsp_forwarder)
+
+# ⚠ 这两个名字决定「装到主页」后图标上显示什么。
+#   ${PROJECT_NAME} 在这个子项目里是 nsp_forwarder —— 直接拿去当显示名的话，
+#   装到主界面后图标上写的就是 "nsp_forwarder"。
+#   APP_DISPLAY_TITLE / APP_DISPLAY_AUTHOR / APP_OUTPUT_NAME 由父 CMakeLists
+#   定义并被子作用域继承；父里没定义时（单独构建本子项目）才回落到默认。
+if (NOT DEFINED APP_DISPLAY_TITLE)
+    set(APP_DISPLAY_TITLE ${PROJECT_NAME})
+endif ()
+if (NOT DEFINED APP_DISPLAY_AUTHOR)
+    set(APP_DISPLAY_AUTHOR ${PROJECT_AUTHOR})
+endif ()
+if (NOT DEFINED APP_OUTPUT_NAME)
+    set(APP_OUTPUT_NAME ${PROJECT_NAME})
+endif ()
 set(PROJECT_TITLEID "010ff000ffff0001")
 set(FORWARDER_SRC "${PROJECT_SOURCE_DIR}/source/main.c" "${PROJECT_SOURCE_DIR}/source/trampoline.s")
 add_executable(${PROJECT_NAME} ${FORWARDER_SRC})
@@ -36,10 +51,10 @@ add_custom_target(${PROJECT_NAME}.pfs0 DEPENDS ${PROJECT_NAME}
 
 add_custom_target(${PROJECT_NAME}.nsp DEPENDS ${PROJECT_NAME}.pfs0
     COMMAND ${CMAKE_COMMAND} -E make_directory "control" "logo"
-    COMMAND ${NX_NACPTOOL_EXE} --create "${PROJECT_NAME}" "${PROJECT_AUTHOR}" "${APP_VERSION}" "control/control.nacp"
+    COMMAND ${NX_NACPTOOL_EXE} --create "${APP_DISPLAY_TITLE}" "${APP_DISPLAY_AUTHOR}" "${APP_VERSION}" "control/control.nacp"
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_RESOURCES}/icon/logo.png" "logo/NintendoLogo.png"
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_RESOURCES}/icon/logo.gif" "logo/StartupMovie.gif"
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_ICON}" "control/icon_AmericanEnglish.dat"
-    COMMAND ${HACBREWPACK_EXE} -k "${PROJECT_KEYSET}" --titleid ${PROJECT_TITLEID} --titlename ${CMAKE_PROJECT_NAME} --noromfs --nostartupuser
+    COMMAND ${HACBREWPACK_EXE} -k "${PROJECT_KEYSET}" --titleid ${PROJECT_TITLEID} --titlename ${APP_OUTPUT_NAME} --noromfs --nostartupuser
     COMMAND ${CMAKE_COMMAND} -E rename "hacbrewpack_nsp/${PROJECT_TITLEID}.nsp" "${PROJECT_RESOURCES}/${PROJECT_NAME}.nsp"
 )
