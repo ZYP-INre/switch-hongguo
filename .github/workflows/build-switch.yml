@@ -36,20 +36,29 @@ jobs:
         run: |
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S --noconfirm --needed \
-            switch-curl switch-nspmini switch-zlib switch-mbedtls switch-dav1d \
+            switch-curl switch-zlib switch-mbedtls switch-dav1d \
             switch-glfw switch-mesa switch-libwebp switch-freetype switch-harfbuzz \
             switch-libpng switch-libjpeg-turbo switch-libass switch-liblua51 \
             switch-libplacebo switch-glm switch-glad switch-bzip2 switch-liblzma \
             switch-pkg-config switch-tools switch-cmake dkp-toolchain-vars
 
-      # mpv / ffmpeg 用的是 wiliwili 的定制包（devkitPro 自带的不支持网络流）
-      - name: 安装 mpv 与 ffmpeg
+      # ⚠ 这四个包都不在 devkitPro 官方源里，是 wiliwili 托管在 GitHub releases 上的：
+      #     ffmpeg / libmpv —— devkitPro 自带的版本不支持网络流（我们要播本地代理的 HTTP 流）
+      #     nspmini / hacBrewPack —— 生成「装到主页」用的 forwarder
+      #   把它们写进 dkp-pacman -S 会报 "target not found" 而整步失败。
+      - name: 安装 wiliwili 定制包
         run: |
           BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
-          curl -sSLO "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst"
-          curl -sSLO "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst"
-          dkp-pacman -U --noconfirm switch-ffmpeg-7.1-1-any.pkg.tar.zst \
-                                     switch-libmpv-0.36.0-3-any.pkg.tar.zst
+          PKGS=(
+            switch-ffmpeg-7.1-1-any.pkg.tar.zst
+            switch-libmpv-0.36.0-3-any.pkg.tar.zst
+            switch-nspmini-48d4fc2-1-any.pkg.tar.xz
+            hacBrewPack-3.05-1-any.pkg.tar.zst
+          )
+          for PKG in "${PKGS[@]}"; do
+            curl -sSLO "$BASE/$PKG"
+            dkp-pacman -U --noconfirm "$PKG"
+          done
 
       - name: 打印工具链版本
         run: aarch64-none-elf-gcc --version | head -1
