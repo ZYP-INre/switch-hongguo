@@ -88,7 +88,9 @@ jobs:
                 -DPLATFORM_SWITCH=ON \
                 -DBRLS_UNITY_BUILD=ON \
                 -DBUILTIN_NSP=ON
-          make -C cmake-build-switch hongguo.nro -j"$(nproc)"
+          # ⚠ 构建的 target 名是 wiliwili.nro（沿用 CMake 的 PROJECT_NAME），
+          #   产物文件名才是 hongguo.nro —— 两者不同，别搞混。
+          make -C cmake-build-switch wiliwili.nro -j"$(nproc)"
 
       - name: 检查产物
         working-directory: wiliwili
