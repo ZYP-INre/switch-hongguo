@@ -57,7 +57,14 @@ jobs:
           )
           for PKG in "${PKGS[@]}"; do
             # -L 不能少：GitHub release 的下载会 302 跳到 objects.githubusercontent.com
-            curl -sSL --retry 3 --max-time 300 -o "$PKG" "$BASE/$PKG"
+            # -C - 断点续传：11MB 的 ffmpeg 包在网络抖动时容易被截断，
+            #       截断的包 dkp-pacman 会报损坏，且错误信息完全不提"下载不完整"。
+            # --max-time 给足 30 分钟，慢也比失败强。
+            for attempt in 1 2 3; do
+              curl -sSL -C - --retry 3 --retry-delay 5 --max-time 1800 -o "$PKG" "$BASE/$PKG" && break
+              echo "第 $attempt 次下载未完成，重试…"
+              sleep 5
+            done
             test -s "$PKG" || { echo "下载失败: $PKG"; exit 1; }
             dkp-pacman -U --noconfirm "$PKG"
           done
