@@ -1,0 +1,27 @@
+<!--
+  红果播放页。VideoView 铺满整个屏幕；状态文字用绝对定位浮在底部，
+  不参与列布局 —— 否则它会占掉一条高度，视频就不是满屏了。
+-->
+<brls:AppletFrame
+        id="hongguo/frame"
+        iconInterpolation="linear"
+        headerHidden="true"
+        footerHidden="false">
+    <brls:Box
+            width="100%"
+            height="100%">
+        <VideoView
+                id="hongguo/video"
+                focusable="true"
+                width="100%"
+                height="100%"/>
+        <brls:Label
+                id="hongguo/status"
+                positionType="absolute"
+                positionLeft="20"
+                positionBottom="8"
+                fontSize="16"
+                textColor="#DDDDDD"
+                text=""/>
+    </brls:Box>
+</brls:AppletFrame>

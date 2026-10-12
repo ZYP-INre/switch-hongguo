@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+    <id>cn.xfangfang.wiliwili</id>
+    <metadata_license>CC0-1.0</metadata_license>
+    <project_license>GPL-3.0-only</project_license>
+    <name>wiliwili</name>
+    <developer id="cn.xfangfang">
+        <name>xfangfang and the wiliwili contributors</name>
+    </developer>
+    <summary>Watch videos from Bilibili</summary>
+    <launchable type="desktop-id">cn.xfangfang.wiliwili.desktop</launchable>
+    <translation type="gettext">wiliwili</translation>
+    <content_rating type="oars-1.1">
+        <content_attribute id="social-info">mild</content_attribute>
+    </content_rating>
+    <description>
+        <p>wiliwili is an open-source Bilibili client delivering an experience similar to the official PC client, supporting touch/mouse/keyboard/gamepad controls and optimized for both desktop and handheld devices.</p>
+        <p xml:lang="zh_CN">wiliwili 是开源的 Bilibili 客户端，提供类似官方PC端的体验，支持触控/鼠标/键盘/手柄操作，适配桌面和手持设备。</p>
+        <p>Features:</p>
+        <p xml:lang="zh_CN">功能特点：</p>
+        <ul>
+            <li>Multilingual: Simplified Chinese, Traditional Chinese, English...</li>
+            <li xml:lang="zh_CN">多语言：简、繁、日、韩、英 ...</li>
+            <li>Theme: Light / Dark</li>
+            <li xml:lang="zh_CN">主题色：拥有深浅两色主题，跟随系统自动切换</li>
+            <li>Player: Video, Bangumi, Film and TV show</li>
+            <li xml:lang="zh_CN">播放页：视频 番剧 电影 纪录片 综艺，支持弹幕与评论</li>
+            <li>Filter: Quickly find the movie and bangumi</li>
+            <li xml:lang="zh_CN">筛选页：快速找到想看的影视内容</li>
+            <li>Search: TV style, Videos and Bangumi...</li>
+            <li xml:lang="zh_CN">搜索页：热搜 视频 番剧 影视</li>
+            <li>Activity: Recently updated video of the following uploader</li>
+            <li xml:lang="zh_CN">动态页：关注的UP主最近视频动态</li>
+            <li>Live: Support watching the following uploader and other system recommendations</li>
+            <li xml:lang="zh_CN">直播页：关注的主播与其他系统推荐</li>
+            <li>Personal Page: Scan Code Login, History, Favourites ...</li>
+            <li xml:lang="zh_CN">个人页：扫码登录 历史记录 个人收藏 我的追番 我的追剧</li>
+            <li>Flatpak: wiliwili config directory is ~/.var/app/cn.xfangfang.wiliwili/config/wiliwili</li>
+            <li xml:lang="zh_CN">Flatpak版的wiliwili的配置目录在~/.var/app/cn.xfangfang.wiliwili/config/wiliwili</li>
+        </ul>
+    </description>
+    <releases>
+        <release date="2025-04-25" version="1.6.0">
+            <description>
+                <p>
+                    Please See Official Changelog at github.com/xfangfang/wiliwili/releases
+                </p>
+            </description>
+        </release>
+    </releases>
+    <screenshots>
+        <screenshot type="default">
+            <image>https://xfangfang.github.io/wiliwili/docs/images/screenshot-3.jpg</image>
+            <caption>Light theme</caption>
+        </screenshot>
+        <screenshot>
+            <image>https://xfangfang.github.io/wiliwili/docs/images/screenshot-4.jpg</image>
+            <caption>Dark theme</caption>
+        </screenshot>
+    </screenshots>
+    <url type="homepage">https://github.com/xfangfang/wiliwili</url>
+    <url type="bugtracker">https://github.com/xfangfang/wiliwili/issues</url>
+    <url type="vcs-browser">https://github.com/xfangfang/wiliwili</url>
+</component>

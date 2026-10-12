@@ -1,0 +1,54 @@
+# Maintainer:  Dave Murphy <davem@devkitpro.org>
+# Contributor: averne <averne381@gmail.com>
+# Contributor: Cpasjuste <cpasjuste@gmail.com>
+
+pkgbasename=libmpv
+pkgname=switch-${pkgbasename}
+pkgver=0.36.0
+pkgrel=2
+pkgdesc='Command line video player (library only)'
+arch=('any')
+url='https://mpv.io/'
+license=('GPL')
+options=(!strip libtool staticlibs)
+source=("${pkgbasename}-${pkgver}.tar.gz::https://github.com/mpv-player/mpv/archive/v${pkgver}.tar.gz" "mpv.patch")
+sha256sums=(
+  'SKIP'
+  'SKIP'
+)
+makedepends=('switch-pkg-config' 'dkp-toolchain-vars')
+depends=('switch-ffmpeg' 'deko3d' 'libuam' 'switch-liblua51')
+groups=('switch-portlibs')
+
+prepare() {
+  cd mpv-$pkgver
+  rm -rf video/out/hwdec/hwdec_deko3d.c
+  rm -rf video/out/deko3d/
+  rm -rf osdep/switch/sys/mman.h
+  rm -rf libmpv/render_dk3d.h
+  rm -rf audio/out/ao_hos.c
+  patch -Np1 -i "$srcdir/mpv.patch"
+}
+
+build() {
+  cd mpv-$pkgver
+
+  source /opt/devkitpro/switchvars.sh
+
+  ./bootstrap.py
+  export CFLAGS="$CFLAGS -D_POSIX_VERSION=200809L -DNDEBUG -I`pwd`/osdep/switch"
+  LIBDIR=${PORTLIBS_PREFIX}/lib TARGET=aarch64-none-elf ./waf configure \
+    --prefix="${PORTLIBS_PREFIX}" --disable-libmpv-shared \
+    --enable-libmpv-static --disable-cplayer --disable-sdl2 \
+    --disable-gl --disable-plain-gl --enable-lua \
+    --enable-deko3d --enable-hos-audio \
+    --disable-iconv --disable-jpeg --disable-libavdevice --disable-debug-build
+  sed -i 's/#define HAVE_POSIX 1/#define HAVE_POSIX 0/' build/config.h
+  ./waf build
+}
+
+package() {
+  cd mpv-$pkgver
+
+  ./waf install --destdir=$pkgdir
+}

@@ -1,0 +1,40 @@
+<!--
+  红果的列表页（首页 / 分集共用）。
+
+  结构照搬 resources/xml/activity/setting_activity.xml —— 那是 wiliwili 真机验证过的
+  可聚焦列表。两个要点不能少：
+
+  1. scrollingBehavior="centered"
+     ScrollingFrame::getDefaultFocus() 在 CENTERED 模式下直接返回子视图的焦点；
+     默认（NATURAL）模式还多一道"焦点必须内切于可视框"的几何检查，
+     布局尚未完成时该检查会失败，导致没有任何视图拿到初始焦点 —— 方向键自然没反应。
+
+  2. 行内容由代码填充 DetailCell（borealis 自带的可聚焦列表项），而不是自造的裸 Box。
+-->
+<brls:AppletFrame
+        id="hongguo/frame"
+        iconInterpolation="linear"
+        headerHidden="true"
+        footerHidden="false">
+    <brls:Box
+            width="auto"
+            height="auto"
+            grow="1.0">
+        <brls:ScrollingFrame
+                width="auto"
+                height="auto"
+                grow="1.0"
+                scrollingBehavior="centered">
+            <brls:Box
+                    id="hongguo/list"
+                    width="auto"
+                    height="auto"
+                    axis="column"
+                    alignItems="stretch"
+                    paddingLeft="30"
+                    paddingRight="30"
+                    paddingTop="10"
+                    paddingBottom="40"/>
+        </brls:ScrollingFrame>
+    </brls:Box>
+</brls:AppletFrame>

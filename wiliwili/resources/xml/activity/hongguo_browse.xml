@@ -1,0 +1,45 @@
+<!--
+  红果浏览页：顶部一排模式按钮（短剧/漫剧/AI剧/短剧榜/漫剧榜），下方封面网格。
+
+  网格用 wiliwili 的 RecyclingGrid —— 全应用都在用它，真机验证过，
+  而且自带封面加载与滚动回收。
+
+  ⚠ 与列表页同理，焦点必须在数据到位后手动给一次，见 hongguo_ui.cpp 的说明。
+-->
+<brls:AppletFrame
+        id="hongguo/frame"
+        iconInterpolation="linear"
+        headerHidden="true"
+        footerHidden="false">
+    <brls:Box
+            width="auto"
+            height="auto"
+            grow="1.0"
+            axis="column">
+        <brls:Box
+                id="hongguo/modes"
+                width="auto"
+                height="auto"
+                axis="row"
+                paddingTop="16"
+                paddingBottom="10"
+                paddingLeft="24"
+                paddingRight="24"/>
+        <brls:Label
+                id="hongguo/status"
+                marginLeft="30"
+                marginBottom="6"
+                fontSize="18"
+                textColor="#AAAAAA"
+                text=""/>
+        <RecyclingGrid
+                id="hongguo/grid"
+                width="auto"
+                height="auto"
+                grow="1"
+                itemHeight="250"
+                spanCount="4"
+                preFetchLine="2"
+                wireframe="false"/>
+    </brls:Box>
+</brls:AppletFrame>

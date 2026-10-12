@@ -1,0 +1,29 @@
+<!-- 红果搜索页：标题 + 提示 + 结果网格 -->
+<brls:AppletFrame
+        id="hongguo/frame"
+        iconInterpolation="linear"
+        headerHidden="true"
+        footerHidden="false">
+    <brls:Box width="auto" height="auto" grow="1.0" axis="column">
+        <brls:Header
+                id="hongguo/search/header"
+                title="搜索"
+                marginLeft="20"/>
+        <brls:Label
+                id="hongguo/status"
+                marginLeft="30"
+                marginBottom="6"
+                fontSize="18"
+                textColor="#AAAAAA"
+                text="按 Y 输入关键词"/>
+        <RecyclingGrid
+                id="hongguo/grid"
+                paddingLeft="20"
+                paddingRight="20"
+                grow="1"
+                itemHeight="250"
+                spanCount="4"
+                preFetchLine="2"
+                wireframe="false"/>
+    </brls:Box>
+</brls:AppletFrame>

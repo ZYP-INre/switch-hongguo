@@ -1,0 +1,36 @@
+*build/
+data/
+.idea/
+cmake-*/
+.gdbinit
+resources/nsp_forwarder.nsp
+tasks.json
+settings.json
+ffmpeg-*
+mpv-*
+*.tar.*
+config/
+.flatpak-builder/
+pack/
+repo/
+*.flatpak
+.vscode
+.xmake
+.vs
+.DS_Store
+/winrt/AppxManifest.xml
+libromfs-generator
+build-*
+android-project
+*.deb
+*.dmp
+# Github Copilot
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+.github/chatmodes/
+# Claude Code
+.claude/
+CLAUDE.md
+# Other AI
+AGENT.md

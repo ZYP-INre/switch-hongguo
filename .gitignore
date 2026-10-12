@@ -1,0 +1,35 @@
+# ---- 构建产物 ----
+hongguo-core/build/
+wiliwili/cmake-build-switch/
+switch/build/
+*.o
+*.a
+*.elf
+*.nro
+*.nacp
+*.map
+*.lst
+
+# ---- 交付物走 Releases，不进版本库 ----
+dist/*.nro
+
+# ---- 上游参考实现与调研中间产物 ----
+hongguoTV/
+wili-src/
+*-tree.json
+*.zip
+ww-master.zip
+ziptest.log
+probe-hongguo.mjs
+lib-tree.json
+top-tree.json
+lib-tree.json
+
+# ---- 工具与临时目录 ----
+.superpowers/
+.runtime/
+.npm-cache/
+.DS_Store
+
+# ---- 本地工具链（体积大且非必需）----
+.devkitpro/

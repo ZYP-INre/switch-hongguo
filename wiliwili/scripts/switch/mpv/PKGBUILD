@@ -1,0 +1,52 @@
+# Maintainer:  Dave Murphy <davem@devkitpro.org>
+# Contributor: averne <averne381@gmail.com>
+# Contributor: Cpasjuste <cpasjuste@gmail.com>
+
+pkgbasename=libmpv
+pkgname=switch-${pkgbasename}
+pkgver=0.36.0
+pkgrel=3
+pkgdesc='Command line video player (library only)'
+arch=('any')
+url='https://mpv.io/'
+license=('GPL')
+options=(!strip libtool staticlibs)
+source=("${pkgbasename}-${pkgver}.tar.gz::https://github.com/mpv-player/mpv/archive/v${pkgver}.tar.gz" "mpv.patch")
+sha256sums=(
+  'SKIP'
+  'SKIP'
+)
+makedepends=('switch-pkg-config' 'dkp-toolchain-vars' 'dkp-meson-scripts')
+depends=('switch-ffmpeg' 'switch-mesa' 'switch-liblua51')
+groups=('switch-portlibs')
+
+prepare() {
+  cd mpv-$pkgver
+  rm -rf build
+  rm -rf audio/out/ao_hos.c
+  rm -rf osdep/switch/sys/mman.h
+  patch -Np1 -i "$srcdir/mpv.patch"
+}
+
+build() {
+  cd mpv-$pkgver
+
+  source /opt/devkitpro/switchvars.sh
+  /opt/devkitpro/meson-cross.sh switch crossfile.txt build\
+        -Dlua=enabled \
+        -Dhos=enabled \
+        -Dhos-audio=enabled \
+        -Diconv=disabled \
+        -Djpeg=disabled \
+        -Dlibavdevice=disabled \
+        -Dmanpage-build=disabled \
+        -Dsdl2=disabled \
+        -Dlibmpv=true \
+        -Dcplayer=false
+  meson compile -C build
+}
+
+package() {
+  cd mpv-$pkgver
+  DESTDIR=$pkgdir meson install -C build
+}

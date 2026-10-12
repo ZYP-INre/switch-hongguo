@@ -1,0 +1,169 @@
+app-id: cn.xfangfang.wiliwili
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: wiliwili
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  # This program is designed for controller
+  - --device=all
+  - --share=network
+  - --socket=pulseaudio
+  # inhibiting screen saver
+  - --talk-name=org.freedesktop.ScreenSaver
+  - --talk-name=org.freedesktop.PowerManagement
+  - --talk-name=org.gnome.SessionManager
+  - --talk-name=org.mate.SessionManager
+  # control steam client
+  - --filesystem=~/.steam
+cleanup:
+  - '*.a'
+  - '*.la'
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - /man
+  - /share/man
+  - /share/gtk-doc
+
+modules:
+
+  - name: libmpv
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dlua=enabled
+      - -Ddebug=false
+      - -Dbuild-date=false
+      - -Dcplayer=false
+      - -Dmanpage-build=disabled
+      - -Dvulkan=disabled
+    sources:
+      - type: archive
+        url: https://github.com/mpv-player/mpv/archive/v0.41.0.tar.gz
+        sha256: ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209
+        x-checker-data:
+          type: anitya
+          project-id: 5348
+          stable-only: true
+          url-template: https://github.com/mpv-player/mpv/archive/v$version.tar.gz
+    modules:
+
+      - name: libXpresent
+        buildsystem: autotools
+        sources:
+          - type: archive
+            url: https://xorg.freedesktop.org/archive/individual/lib/libXpresent-1.0.2.tar.xz
+            sha256: 4e5b21b4812206a4b223013606ae31170502c1043038777a1ef8f70c09d37602
+            x-checker-data:
+              type: anitya
+              project-id: 17166
+              stable-only: true
+              url-template: https://xorg.freedesktop.org/archive/individual/lib/libXpresent-$version.tar.xz
+
+      - name: libdisplay-info
+        cleanup:
+          - /bin
+        buildsystem: meson
+        sources:
+          - type: archive
+            url: https://gitlab.freedesktop.org/emersion/libdisplay-info/-/releases/0.3.0/downloads/libdisplay-info-0.3.0.tar.xz
+            sha256: 6ae77cd937f9cf7d1321d35c116062c4911e8447010a6a713ac4286f7a9d5987
+        modules:
+          - name: hwdata
+            cleanup:
+              - "*"
+            config-opts:
+              - --disable-blacklist
+            sources:
+              - type: archive
+                url: https://github.com/vcrhonek/hwdata/archive/v0.405.tar.gz
+                sha256: 13605519e72e46aa13d5eede1901a07a6c83cd25ef866a86e7458047b5c81ce5
+
+      - name: luajit
+        no-autogen: true
+        cleanup:
+          - /bin
+          - /include
+          - /lib/pkgconfig
+          - /share/man
+        sources:
+          - type: git
+            url: https://github.com/LuaJIT/LuaJIT.git
+            mirror-urls:
+              - https://luajit.org/git/luajit.git
+            disable-shallow-clone: true
+            commit: 97813fb924edf822455f91a5fbbdfdb349e5984f
+            x-checker-data:
+              type: json
+              url: https://api.github.com/repos/LuaJIT/LuaJIT/commits
+              commit-query: first( .[].sha )
+              version-query: first( .[].sha )
+              timestamp-query: first( .[].commit.committer.date )
+          - type: shell
+            commands:
+              - sed -i 's|/usr/local|/app|' ./Makefile
+
+      - name: libass
+        config-opts:
+          - --disable-static
+        sources:
+          - type: archive
+            url: https://github.com/libass/libass/releases/download/0.17.4/libass-0.17.4.tar.gz
+            sha256: a886b3b80867f437bc55cff3280a652bfa0d37b43d2aff39ddf3c4f288b8c5a8
+            x-checker-data:
+              type: anitya
+              project-id: 1560
+              stable-only: true
+              url-template: https://github.com/libass/libass/releases/download/$version/libass-$version.tar.gz
+
+      - name: uchardet
+        buildsystem: cmake-ninja
+        config-opts:
+          - -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          - -DCMAKE_BUILD_TYPE=Release
+          - -DBUILD_STATIC=0
+        sources:
+          - type: archive
+            url: https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz
+            sha256: e97a60cfc00a1c147a674b097bb1422abd9fa78a2d9ce3f3fdcc2e78a34ac5f0
+            x-checker-data:
+              type: anitya
+              project-id: 9265
+              stable-only: true
+              url-template: https://www.freedesktop.org/software/uchardet/releases/uchardet-$version.tar.xz
+
+      - name: libplacebo
+        buildsystem: meson
+        config-opts:
+          - -Dglslang=disabled
+          - -Dd3d11=disabled
+          - -Ddemos=false
+        sources:
+          - type: git
+            url: https://github.com/haasn/libplacebo.git
+            commit: cee9b076f2c63104ccfd497fa79c39a867293ec4
+            tag: v7.360.1
+            x-checker-data:
+              type: git
+              tag-pattern: ^v([\d.]+)$
+
+  - name: wiliwili
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DPLATFORM_DESKTOP=ON
+      - -DINSTALL=ON
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DGLFW_BUILD_WAYLAND=ON
+      - -DGLFW_BUILD_X11=ON
+      - -DUSE_SYSTEM_CURL=ON
+      - -DUSE_GLES2=OFF
+      - -DUSE_EGL=ON
+      - -DBRLS_UNITY_BUILD=ON
+      - -DCMAKE_UNITY_BUILD_BATCH_SIZE=16
+    builddir: true
+    sources:
+      - type: dir
+        path: '.'

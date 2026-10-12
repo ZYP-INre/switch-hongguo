@@ -1,0 +1,89 @@
+# 在云端构建红果短剧的 Switch .nro
+#
+# 为什么用 CI 而不是本机：
+#   1. devkitPro 官方源 pkg.devkitpro.org 被 Cloudflare 按 TLS 指纹拦截，
+#      本机网络下所有路径都是 403。GitHub 的构建机没有这个限制。
+#   2. 生成「装到主页」用的 NSP forwarder 需要 hacbrewpack，而那是个
+#      Linux x86_64 的可执行文件，macOS 上根本跑不了。
+# 这两件事都只在 Linux 上能解决，所以构建放这里。
+#
+# 用法：推到 GitHub 即自动构建，产物在 Actions 的 Artifacts 里；
+#       打 v* 标签会自动创建附带 .nro 的 Release。
+
+name: 构建 Switch
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-nro:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+
+    env:
+      DEVKITPRO: /opt/devkitpro
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 镜像自带 devkitA64 与 libnx；其余依赖需另装。
+      # switch-curl 是内容层的 HTTP 依赖；switch-nspmini + hacBrewPack 用于生成 forwarder。
+      - name: 安装依赖包
+        run: |
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S --noconfirm --needed \
+            switch-curl switch-nspmini switch-zlib switch-mbedtls switch-dav1d \
+            switch-glfw switch-mesa switch-libwebp switch-freetype switch-harfbuzz \
+            switch-libpng switch-libjpeg-turbo switch-libass switch-liblua51 \
+            switch-libplacebo switch-glm switch-glad switch-bzip2 switch-liblzma \
+            switch-pkg-config switch-tools switch-cmake dkp-toolchain-vars
+
+      # mpv / ffmpeg 用的是 wiliwili 的定制包（devkitPro 自带的不支持网络流）
+      - name: 安装 mpv 与 ffmpeg
+        run: |
+          BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
+          curl -sSLO "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst"
+          curl -sSLO "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst"
+          dkp-pacman -U --noconfirm switch-ffmpeg-7.1-1-any.pkg.tar.zst \
+                                     switch-libmpv-0.36.0-3-any.pkg.tar.zst
+
+      - name: 打印工具链版本
+        run: aarch64-none-elf-gcc --version | head -1
+
+      - name: 构建 .nro
+        working-directory: wiliwili
+        env:
+          PKG_CONFIG_PATH: /opt/devkitpro/portlibs/switch/lib/pkgconfig
+          PKG_CONFIG_LIBDIR: /opt/devkitpro/portlibs/switch/lib/pkgconfig
+        run: |
+          cmake -B cmake-build-switch \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DPLATFORM_SWITCH=ON \
+                -DBRLS_UNITY_BUILD=ON \
+                -DBUILTIN_NSP=ON
+          make -C cmake-build-switch hongguo.nro -j"$(nproc)"
+
+      - name: 检查产物
+        working-directory: wiliwili
+        run: |
+          ls -la cmake-build-switch/hongguo.nro
+          test -s cmake-build-switch/hongguo.nro
+          # NRO 的魔数在偏移 0x10（头部设计如此，不是文件开头）
+          test "$(dd if=cmake-build-switch/hongguo.nro bs=1 skip=16 count=4 2>/dev/null)" = "NRO0"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hongguo-nro
+          path: wiliwili/cmake-build-switch/hongguo.nro
+          if-no-files-found: error
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wiliwili/cmake-build-switch/hongguo.nro
+          generate_release_notes: true

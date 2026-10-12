@@ -1,0 +1,346 @@
+//
+// Created by fang on 2022/7/7.
+//
+
+#pragma once
+
+#include <fstream>
+#include <string>
+#include <map>
+#include <vector>
+#include <unordered_set>
+#include <nlohmann/json.hpp>
+#include "analytics.h"
+#include "borealis/core/singleton.hpp"
+#include "borealis/core/logger.hpp"
+
+#ifdef PS4
+const std::string primaryDNSStr   = "223.5.5.5";
+const std::string secondaryDNSStr = "1.1.1.1";
+#endif
+
+typedef std::map<std::string, std::string> Cookie;
+constexpr uint32_t MINIMUM_WINDOW_WIDTH  = 480;
+constexpr uint32_t MINIMUM_WINDOW_HEIGHT = 270;
+
+enum class SettingItem {
+    HIDE_BOTTOM_BAR,
+    HIDE_FPS,
+    FULLSCREEN,
+    MINIMUM_WINDOW_WIDTH,  // 窗口最小宽度
+    MINIMUM_WINDOW_HEIGHT, // 窗口最小高度
+    ON_TOP_WINDOW_WIDTH,    // 窗口置顶设置为自动时，低于此宽度的窗口自动置顶
+    ON_TOP_WINDOW_HEIGHT,   // 窗口置顶设置为自动时，低于此高度的窗口自动置顶
+    ON_TOP_MODE,  // 窗口置顶模式
+    APP_THEME,      // 深浅主题色
+    APP_LANG,       // 应用语言
+    APP_RESOURCES,  // 自定义界面布局
+    APP_UI_SCALE,   // 界面缩放
+    APP_SWAP_ABXY,  // A-B 交换 和 X-Y 交换
+    SCROLL_SPEED,   // 列表滑动速度
+    HISTORY_REPORT,
+    PLAYER_AUTO_PLAY, // 进入详情页自动播放
+    PLAYER_STRATEGY,
+    PLAYER_BOTTOM_BAR,
+    PLAYER_HIGHLIGHT_BAR,
+    PLAYER_SKIP_OPENING_CREDITS,
+    PLAYER_LOW_QUALITY,
+    PLAYER_INMEMORY_CACHE,
+    PLAYER_HWDEC,
+    PLAYER_HWDEC_CUSTOM,
+    PLAYER_EXIT_FULLSCREEN_ON_END,
+    PLAYER_WINDOW_FULLSCREEN_ON_APP_FULLSCREEN, // 应用内全屏时同步切换窗口全屏
+    PLAYER_DEFAULT_SPEED,
+    PLAYER_VOLUME,
+    PLAYER_ASPECT,
+    PLAYER_BRIGHTNESS,
+    PLAYER_CONTRAST,
+    PLAYER_SATURATION,
+    PLAYER_HUE,
+    PLAYER_GAMMA,
+    PLAYER_OSD_TV_MODE,
+    PLAYER_OSD_HIDE,
+    VIDEO_QUALITY,
+    VIDEO_QUALITY_LANDSCAPE_MAX,
+    VIDEO_QUALITY_PORTRAIT_MAX,
+    TEXTURE_CACHE_NUM,
+    OPENCC_ON,
+    CUSTOM_UPDATE_API,
+    IMAGE_REQUEST_THREADS,
+    VIDEO_FORMAT,
+    VIDEO_CODEC,
+    AUDIO_QUALITY,
+    GAMEPAD_VIBRATION,
+    DANMAKU_ON,
+    DANMAKU_FILTER_LEVEL,
+    DANMAKU_FILTER_SCROLL,
+    DANMAKU_FILTER_TOP,
+    DANMAKU_FILTER_BOTTOM,
+    DANMAKU_FILTER_COLOR,
+    DANMAKU_FILTER_ADVANCED,
+    DANMAKU_SMART_MASK,
+    DANMAKU_STYLE_AREA,
+    DANMAKU_STYLE_ALPHA,
+    DANMAKU_STYLE_FONTSIZE,
+    DANMAKU_STYLE_LINE_HEIGHT,
+    DANMAKU_STYLE_SPEED,
+    DANMAKU_STYLE_FONT,
+    DANMAKU_RENDER_QUALITY,
+    KEYMAP,
+    HOME_WINDOW_STATE,
+    SEARCH_TV_MODE,
+    LIMITED_FPS,
+    SWAP_INTERVAL,
+    DEACTIVATED_TIME,
+    DEACTIVATED_FPS,
+    DLNA_IP,
+    DLNA_PORT,
+    DLNA_NAME,
+    HTTP_PROXY,
+    HTTP_PROXY_STATUS,
+    TLS_VERIFY,
+    HTTP_TIMEOUT,
+    HTTP_CONNECTION_TIMEOUT,
+    HTTP_DNS_CACHE_TIMEOUT,
+    UP_FILTER,
+    LIVE_DANMAKU_FILTER_LEVEL,
+    LIVE_SIDEBAR_DANMAKU_COUNT, // 直播间侧边栏弹幕数量上限
+    SHORTCUT_REFRESH, // 刷新快捷键
+    SHORTCUT_SEARCH, // 搜索快捷键
+    SHORTCUT_LAST, // 上一个Tab快捷键
+    SHORTCUT_NEXT, // 下一个Tab快捷键
+    SHORTCUT_LAST_SUB, // 上一个子Tab快捷键 (热门、追番、影视 三个页面的二级菜单)
+    SHORTCUT_NEXT_SUB, // 下一个子Tab快捷键
+    SHORTCUT_VOLUME_UP, // 音量增大快捷键
+    SHORTCUT_VOLUME_DOWN, // 音量减小快捷键
+    SHORTCUT_VIDEO_PROFILE, // 视频详情快捷键
+    SHORTCUT_DANMAKU, // 弹幕快捷键
+    SHORTCUT_PLAYLIST, // 播放列表快捷键
+    SHORTCUT_FORWARD, // 快进快捷键
+    SHORTCUT_REWIND, // 快退快捷键
+    SHORTCUT_SETTING, // 设置快捷键
+    SHORTCUT_VIDEO_QUALITY, // 视频清晰度菜单快捷键
+    SHORTCUT_VIDEO_SPEED, // 视频倍速菜单快捷键
+    SHORTCUT_VIDEO_SPEEDUP, // 视频倍速快捷键
+    SHORTCUT_VIDEO_OSD, // 切换OSD显示
+    SHORTCUT_VIDEO_PAUSE, // 视频播放暂停快捷键
+    PLAYER_AUTO_FULLSCREEN, // 进入播放页后自动全屏
+    CUSTOM_THEME_COLOR,  // 自定义主题色 (十六进制 #RRGGBB，例如 #FF6699)
+};
+
+class APPVersion : public brls::Singleton<APPVersion> {
+    inline static std::string RELEASE_API = "https://api.github.com/repos/xfangfang/wiliwili/releases/latest";
+
+public:
+    int major, minor, revision;
+    std::string git_commit, git_tag;
+
+    APPVersion();
+
+    std::string getVersionStr();
+
+    std::string getPlatform();
+
+    static std::string getPackageName();
+
+    bool needUpdate(std::string latestVersion);
+
+    void checkUpdate(int delay = 2000, bool showUpToDateDialog = false);
+};
+
+class CustomTheme {
+public:
+    std::string id;
+    std::string name;
+    std::string desc;
+    std::string version;
+    std::string author;
+    std::string path;
+};
+inline void from_json(const nlohmann::json& nlohmann_json_j, CustomTheme& nlohmann_json_t) {
+    if (nlohmann_json_j.contains("name") && nlohmann_json_j.at("name").is_string())
+        nlohmann_json_j.at("name").get_to(nlohmann_json_t.name);
+    if (nlohmann_json_j.contains("desc") && nlohmann_json_j.at("desc").is_string())
+        nlohmann_json_j.at("desc").get_to(nlohmann_json_t.desc);
+    if (nlohmann_json_j.contains("version") && nlohmann_json_j.at("version").is_string())
+        nlohmann_json_j.at("version").get_to(nlohmann_json_t.version);
+    if (nlohmann_json_j.contains("author") && nlohmann_json_j.at("author").is_string())
+        nlohmann_json_j.at("author").get_to(nlohmann_json_t.author);
+}
+
+class SeasonCustomItem {
+public:
+    std::string player_aspect;
+    bool custom_clip{};
+    int clip_start{};
+    int clip_end{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SeasonCustomItem, player_aspect, custom_clip, clip_start, clip_end);
+
+typedef std::unordered_map<std::string, SeasonCustomItem> SeasonCustomSetting;
+
+typedef struct ProgramOption {
+    /// 保存在配置文件中的选项明
+    std::string key;
+    /// 字符串类型的选项
+    std::vector<std::string> optionList;
+    /// 数字类型的选项
+    std::vector<int> rawOptionList;
+    /// 默认的选项，范围为 [0 - optionList.size()-1]
+    size_t defaultOption;
+} ProgramOption;
+
+class ProgramConfig : public brls::Singleton<ProgramConfig> {
+public:
+    ProgramConfig();
+    ProgramConfig(const ProgramConfig& config);
+    void setProgramConfig(const ProgramConfig& conf);
+    void setCookie(const Cookie& data);
+    Cookie getCookie();
+    void addHistory(const std::string& key);
+    std::vector<std::string> getHistoryList();
+    void setHistory(const std::vector<std::string>& list);
+    void setRefreshToken(const std::string& token);
+    std::string getRefreshToken() const;
+    std::string getCSRF();
+    std::string getUserID();
+    std::string getUuID();
+    bool hasLoginInfo();
+
+    // Google Analytics ID
+    std::string getClientID();
+
+    // Device ID
+    std::string getDeviceID();
+
+    void loadHomeWindowState();
+    void saveHomeWindowState();
+
+    template <typename T>
+    T getSettingItem(SettingItem item, T defaultValue) {
+        auto& key = SETTING_MAP[item].key;
+        if (!setting.contains(key)) return defaultValue;
+        try {
+            return this->setting.at(key).get<T>();
+        } catch (const std::exception& e) {
+            brls::Logger::error("Damaged config found: {}/{}", key, e.what());
+            return defaultValue;
+        }
+    }
+
+    template <typename T>
+    void setSettingItem(SettingItem item, T data, bool save = true) {
+        setting[SETTING_MAP[item].key] = data;
+        if (save) this->save();
+    }
+
+    ProgramOption getOptionData(SettingItem item);
+
+    /**
+     * 获取 int 类型选项的当前设定值的索引
+     */
+    size_t getIntOptionIndex(SettingItem item);
+
+    /**
+     * 获取 int 类型选项的当前设定值
+     */
+    int getIntOption(SettingItem item);
+
+    bool getBoolOption(SettingItem item);
+
+    int getStringOptionIndex(SettingItem item);
+
+    void load();
+
+    void save();
+
+    void init();
+
+    std::string getConfigDir();
+
+    std::string getHomePath();
+
+    void exit(char* argv[]);
+
+    void loadCustomThemes();
+
+    std::vector<CustomTheme> getCustomThemes();
+
+    std::string getProxy();
+
+    void setProxy(const std::string& proxy);
+
+    void setTlsVerify(bool value);
+
+    void addSeasonCustomSetting(const std::string& key, const SeasonCustomItem& item);
+
+    SeasonCustomSetting getSeasonCustomSetting() const;
+
+    SeasonCustomItem getSeasonCustom(const std::string& key) const;
+
+    SeasonCustomItem getSeasonCustom(unsigned int key) const;
+
+    void addSeasonCustomSetting(unsigned int key, const SeasonCustomItem& item);
+
+    void setSeasonCustomSetting(const SeasonCustomSetting& setting);
+
+    void toggleFullscreen();
+
+    void setWindowFullscreen(bool value);
+
+    /**
+     * 检查是否需要置顶窗口
+     */
+    void checkOnTop();
+
+    std::vector<CustomTheme> customThemes;
+    Cookie cookie = {};
+    std::string refreshToken;
+    nlohmann::json setting;
+    std::string client;
+    std::string device;
+    std::vector<std::string> searchHistory;
+    SeasonCustomSetting seasonCustom;
+    std::string httpProxy;
+    std::string httpsProxy;
+    std::unordered_set<uint64_t> upFilter; // 此列表中的up主在推荐页面将不显示
+
+    static std::unordered_map<SettingItem, ProgramOption> SETTING_MAP;
+};
+
+inline void to_json(nlohmann::json& nlohmann_json_j, const ProgramConfig& nlohmann_json_t) {
+    NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, cookie, refreshToken, setting, client, device,
+                                             searchHistory, seasonCustom));
+}
+
+inline void from_json(const nlohmann::json& nlohmann_json_j, ProgramConfig& nlohmann_json_t) {
+    if (nlohmann_json_j.contains("cookie") && !nlohmann_json_j.at("cookie").empty())
+        nlohmann_json_j.at("cookie").get_to(nlohmann_json_t.cookie);
+    if (nlohmann_json_j.contains("searchHistory") && nlohmann_json_j.at("searchHistory").is_array())
+        nlohmann_json_j.at("searchHistory").get_to(nlohmann_json_t.searchHistory);
+    if (nlohmann_json_j.contains("seasonCustom") && nlohmann_json_j.at("seasonCustom").is_object())
+        nlohmann_json_j.at("seasonCustom").get_to(nlohmann_json_t.seasonCustom);
+    if (nlohmann_json_j.contains("setting")) nlohmann_json_j.at("setting").get_to(nlohmann_json_t.setting);
+    if (nlohmann_json_j.contains("client") && nlohmann_json_j.at("client").is_string())
+        nlohmann_json_j.at("client").get_to(nlohmann_json_t.client);
+    if (nlohmann_json_j.contains("device") && nlohmann_json_j.at("device").is_string())
+        nlohmann_json_j.at("device").get_to(nlohmann_json_t.device);
+    if (nlohmann_json_j.contains("refreshToken") && nlohmann_json_j.at("refreshToken").is_string())
+        nlohmann_json_j.at("refreshToken").get_to(nlohmann_json_t.refreshToken);
+}
+
+class Register {
+public:
+    static void initCustomView();
+    static void initCustomTheme();
+    static void initCustomStyle();
+
+    /// 返回用户自定义的主题色，格式为 "#RRGGBB"；未设置时返回空字符串。
+    static const std::string& getCustomThemeColorHex();
+
+    /// 判断颜色字符串是否为 Bilibili 官方默认大会员粉色 (#FB7299)。
+    static bool isBilibiliDefaultPink(const std::string& color);
+
+private:
+    static std::string customThemeColorHex;
+};
