@@ -33,7 +33,9 @@ jobs:
       # 镜像自带 devkitA64 与 libnx；其余依赖需另装。
       # switch-curl 是内容层的 HTTP 依赖；switch-nspmini + hacBrewPack 用于生成 forwarder。
       - name: 安装依赖包
+        shell: bash
         run: |
+          # 容器默认 shell 是 sh，这里也钉成 bash 保持一致
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S --noconfirm --needed \
             switch-curl switch-zlib switch-mbedtls switch-dav1d \
@@ -46,7 +48,10 @@ jobs:
       #     ffmpeg / libmpv —— devkitPro 自带的版本不支持网络流（我们要播本地代理的 HTTP 流）
       #     nspmini / hacBrewPack —— 生成「装到主页」用的 forwarder
       #   把它们写进 dkp-pacman -S 会报 "target not found" 而整步失败。
+      # ⚠ 必须显式指定 bash。devkitpro 容器里的默认 shell 是 /bin/sh（dash），
+      #   而下面的 PKGS=(...) 数组语法 dash 不认识，会报 Syntax error: "(" unexpected。
       - name: 安装 wiliwili 定制包
+        shell: bash
         run: |
           BASE="https://github.com/xfangfang/wiliwili/releases/download/v0.1.0"
           PKGS=(
