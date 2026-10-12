@@ -56,7 +56,9 @@ jobs:
             hacBrewPack-3.05-1-any.pkg.tar.zst
           )
           for PKG in "${PKGS[@]}"; do
-            curl -sSLO "$BASE/$PKG"
+            # -L 不能少：GitHub release 的下载会 302 跳到 objects.githubusercontent.com
+            curl -sSL --retry 3 --max-time 300 -o "$PKG" "$BASE/$PKG"
+            test -s "$PKG" || { echo "下载失败: $PKG"; exit 1; }
             dkp-pacman -U --noconfirm "$PKG"
           done
 
