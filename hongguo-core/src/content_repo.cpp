@@ -248,26 +248,6 @@ HeaderList mergeHeaders(const HeaderList& base, const HeaderList& override) {
 }
 
 // 读取 HTML 属性值中的实体引用
-std::string decodeEntities(std::string value) {
-  struct Entity {
-    const char* from;
-    const char* to;
-  };
-  static const Entity kEntities[] = {{"&quot;", "\""}, {"&#34;", "\""}, {"&apos;", "'"},
-                                     {"&#39;", "'"},  {"&lt;", "<"},   {"&gt;", ">"},
-                                     {"&amp;", "&"}};
-  for (const auto& entity : kEntities) {
-    const std::string from(entity.from);
-    const std::string to(entity.to);
-    size_t at = 0;
-    while ((at = value.find(from, at)) != std::string::npos) {
-      value.replace(at, from.size(), to);
-      at += to.size();
-    }
-  }
-  return value;
-}
-
 
 // ---------------------------------------------------------- 排行榜 HTML 解析
 //
