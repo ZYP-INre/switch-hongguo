@@ -631,6 +631,11 @@ void PlayerActivity::playIndex(size_t index) {
       }
       if (video) {
         video->hideLoading();
+        // wiliwili 的 VideoView::setUrl 会给 mpv 带一个 network-timeout=5
+        // （见 view/video_view.cpp 的 genExtraUrlParam）——对本地代理来说太紧：
+        // 我们的数据是"按需从 CDN 拉+解密"，慢一点就被判定超时。
+        // 这里单独把超时放宽，只影响红果的流，不动 wiliwili 的公共配置。
+        MPVCore::instance().command_async("set", "network-timeout", "30");
         video->setUrl(url);        // 换集就是换 URL，mpv 直接接上
         video->showOSD(true);
       }

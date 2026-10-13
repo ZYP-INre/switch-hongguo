@@ -18,9 +18,16 @@
 namespace hongguo {
 namespace {
 
-// 1MB（与 StreamReader::kMaxReadLength 一致）。原来 256KB 会让
-// 一次播放产生 4 倍的 Range 请求，每个都要走一次网络往返。
-constexpr size_t kChunkSize = 1024 * 1024;
+// ⚠ 128KB，刻意偏小。
+//
+// wiliwili 给 mpv 设了 network-timeout=5（见 video_view.cpp 的 genExtraUrlParam），
+// 意思是「5 秒收不到数据就放弃」。而本代理是收到请求才去 CDN 拉、拉完解密再吐，
+// 块越大首字节越晚 —— 1MB 的块要现拉 768KB，在 Switch 上轻易超过 5 秒，
+// mpv 就会直接放弃，表现为进度 0/0、有画面框但不播。
+//
+// 用 128KB：前两块正好命中 prepare() 预取的 256KB 前缀缓存，**立刻就能发出去**，
+// 之后每块只需拉 128KB，远低于超时阈值。连接已复用，多几次请求的代价可以接受。
+constexpr size_t kChunkSize = 128 * 1024;
 
 void writeAll(int fd, const char* data, size_t size) {
   size_t sent = 0;
