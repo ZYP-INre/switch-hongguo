@@ -159,9 +159,15 @@ std::string Core::openStream(const std::string& episodeId, std::string& quality)
   const StreamInfo info = impl_->repo.stream(episodeId);
   quality = info.quality;
   impl_->reader = std::make_unique<StreamReader>(impl_->http, info);
-  // 用 warm() 而非 prepare()：前者会把 1MB 前缀都预取到本地。
-  // 只 prepare() 的话，起播后头几秒每次读取都要现去 CDN 拉，表现为一开始就卡。
-  impl_->reader->warm();
+  // 只做 prepare()（拉 256KB 头部、解析 moov 建样本索引），**不做 warm()**。
+  //
+  // warm() 会再预取到 1MB，但 CDN 吞吐实测只有约 0.2MB/s，
+  // 这一步要 5～7 秒 —— 加上前面的解析，起播前要干等十几秒。
+  // mpv 等不到数据就会超时，表现正是「进度 0/0、一直加载中」，
+  // 而且越大的分集越容易触发（第 1 集往往最大，所以"第一集不能放"）。
+  //
+  // 连接复用已经生效，后续按需拉取不必每次重新握手，起播后的流畅度有保障。
+  impl_->reader->prepare();
   impl_->proxy = std::make_unique<LocalProxy>();
   return impl_->proxy->start(*impl_->reader);
 }

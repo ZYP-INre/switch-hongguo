@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -43,6 +44,9 @@ class LocalProxy {
  private:
   void acceptLoop();
   void handleConnection(int client);
+
+  // 连接之间并发，但对 reader 的读取必须串行
+  std::mutex readerMutex_;
 
   StreamReader* reader_ = nullptr;
   int listenFd_ = -1;

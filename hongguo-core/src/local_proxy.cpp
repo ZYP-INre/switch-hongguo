@@ -9,6 +9,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <mutex>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -139,6 +141,7 @@ void LocalProxy::stop() {
 }
 
 void LocalProxy::acceptLoop() {
+  std::vector<std::thread> workers;
   while (running_) {
     const int client = ::accept(listenFd_, nullptr, nullptr);
     if (client < 0) {
@@ -149,8 +152,17 @@ void LocalProxy::acceptLoop() {
     int on = 1;
     ::setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 #endif
-    handleConnection(client);
-    ::close(client);
+    // ⚠ 每个连接必须独立线程处理。
+    //   mpv 经常同时开多条连接（读 moov、读数据、seek 时另开）。
+    //   原来在 accept 循环里同步处理，第一条连接不结束第二条就进不来 ——
+    //   mpv 等不到响应，表现就是进度 0/0、一直转圈。
+    workers.emplace_back([this, client] {
+      handleConnection(client);
+      ::close(client);
+    });
+  }
+  for (std::thread& worker : workers) {
+    if (worker.joinable()) worker.join();
   }
 }
 
@@ -219,7 +231,13 @@ void LocalProxy::handleConnection(int client) {
 
   for (int64_t at = start; at <= end;) {
     const int chunk = static_cast<int>(std::min<int64_t>(kChunkSize, end - at + 1));
-    Bytes piece = reader_->read(at, chunk);
+    Bytes piece;
+    {
+      // StreamReader 内部有前缀缓存与共享连接，多线程同时读会互相踩。
+      // 连接之间并发，读动作本身串行。
+      std::lock_guard<std::mutex> guard(readerMutex_);
+      piece = reader_->read(at, chunk);
+    }
     if (piece.empty()) break;
     writeAll(client, reinterpret_cast<const char*>(piece.data()), piece.size());
     at += static_cast<int64_t>(piece.size());
