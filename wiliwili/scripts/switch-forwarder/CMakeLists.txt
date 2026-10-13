@@ -60,6 +60,9 @@ add_custom_target(${PROJECT_NAME}.nsp DEPENDS ${PROJECT_NAME}.pfs0
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_RESOURCES}/icon/logo.png" "logo/NintendoLogo.png"
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_RESOURCES}/icon/logo.gif" "logo/StartupMovie.gif"
     COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_ICON}" "control/icon_AmericanEnglish.dat"
-    COMMAND ${HACBREWPACK_EXE} -k "${PROJECT_KEYSET}" --titleid ${PROJECT_TITLEID} --titlename ${APP_OUTPUT_NAME} --noromfs --nostartupuser
+    # ⚠ --titlename 必须用显示名，不能用 APP_OUTPUT_NAME。
+    #   实测：这里传 hongguo 的话，hacbrewpack 会把 nacptool 刚生成的
+    #   中文标题覆盖掉，最终装到主页的图标上写的是 hongguo。
+    COMMAND ${HACBREWPACK_EXE} -k "${PROJECT_KEYSET}" --titleid ${PROJECT_TITLEID} --titlename "${APP_DISPLAY_TITLE}" --noromfs --nostartupuser
     COMMAND ${CMAKE_COMMAND} -E rename "hacbrewpack_nsp/${PROJECT_TITLEID}.nsp" "${PROJECT_RESOURCES}/${PROJECT_NAME}.nsp"
 )
