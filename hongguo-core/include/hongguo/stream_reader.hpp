@@ -29,6 +29,10 @@ class StreamReader {
   Bytes read(int64_t start, int length);
 
   int64_t total() const { return total_; }
+
+  // 诊断用：把前 n 个样本的区间/IV/加密偏移格式化成文本，供真机与桌面端对比。
+  // 解密在两端结果不一致时，先靠它判断是索引解析偏了还是 CTR 算偏了。
+  std::string debugSampleDump(size_t count) const;
   bool hasKey() const { return info_.key.has_value() && !info_.key->empty(); }
   const StreamInfo& info() const { return info_; }
 

@@ -869,7 +869,9 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
 
   StreamInfo out;
   out.url = std::move(url);
+  out.episodeId = episodeId;
   const std::string spade = jstr(*selected->item, "spade_a");
+  out.rawKey = spade;
   if (!spade.empty()) out.key = media_crypto::deriveKey(spade);
   if (selected->quality > 0) {
     out.quality = std::to_string(selected->quality) + "P";

@@ -18,6 +18,7 @@
 #include <string>
 
 #include "hongguo/content_repo.hpp"
+#include "hongguo/digest.hpp"
 #include "hongguo/http.hpp"
 #include "hongguo/local_proxy.hpp"
 #include "hongguo/stream_reader.hpp"
@@ -25,6 +26,12 @@
 namespace {
 
 using namespace hongguo;
+
+// ⚠ 固定分集 ID，用于和桌面端对拍。
+//   之前这里走「首页第一部 → 第1集」，而桌面端参考值是另一部剧算的 ——
+//   两边根本不是同一个视频，密钥和样本当然对不上。
+//   改这里时，桌面端必须用同一个 ID。
+constexpr const char* kDemoEpisode = "7692469795035302936";
 
 int64_t nowMillis() {
   return static_cast<int64_t>(armTicksToNs(armGetSystemTick()) / 1000000ull);
@@ -114,22 +121,17 @@ void runProbe(Report& report) {
 
   // ---- 2. detail ----
   printf("[2] DETAIL\n");
-  std::string episodeId;
+  std::string episodeId = kDemoEpisode;
   try {
     const Detail detail = repo.detail(home.items[0].id);
     printf("    OK  episodes=%zu\n", detail.episodes.size());
-    if (!detail.episodes.empty()) episodeId = detail.episodes[0];
     report.detail = true;
   } catch (const std::exception& e) {
     printError("    FAIL  ", e.what());
     report.fail("detail", e.what());
     return;
   }
-  if (episodeId.empty()) {
-    report.fail("detail", "no episode");
-    return;
-  }
-  printf("    first episode id=%s\n", episodeId.c_str());
+  printf("    使用固定分集 id=%s（与桌面端一致）\n", episodeId.c_str());
 
   // ---- 3. 播放解析（签名 + 两层解密）----
   printf("[3] STREAM RESOLVE  (signed POST + 2-layer decrypt)\n");
@@ -160,6 +162,33 @@ void runProbe(Report& report) {
     if (fourcc != "ftyp") {
       report.fail("decrypt", "bad container header");
       return;
+    }
+
+    // ⚠ 头部 4 字节是**未加密**区域，验它说明不了解密对不对。
+    //   这里读一段**加密的视频数据**并打印指纹，与桌面端对拍 ——
+    //   解密若在 ARM 上有偏差，mpv 拿到的就是乱码，表现为 0/0 不播。
+    // 逐段打印中间值，用来判断是「密钥派生」「样本索引」还是「CTR 解密」出了偏差
+    printf("    EP=%s\n", info.episodeId.c_str());
+    printf("    QUALITY=%s\n", info.quality.c_str());
+    printf("    SPADE_A len=%zu first32=%.32s\n", info.rawKey.size(), info.rawKey.c_str());
+    printf("    SPADE_A len=%zu first32=%.32s\n", info.rawKey.size(), info.rawKey.c_str());
+    if (info.key) {
+      printf("    KEY len=%zu hex=%s\n", info.key->size(), toHex(*info.key).c_str());
+    } else {
+      printf("    KEY 无（资源未加密）\n");
+    }
+    {
+      printf("%s", reader.debugSampleDump(3).c_str());
+    }
+    {
+      const int64_t off = 2 * 1024 * 1024;   // 2MB 处，远在 moov 之后，必为加密样本
+      if (reader.total() > off + 1024 * 1024) {
+        const Bytes mid = reader.read(off, 1024 * 1024);
+        printf("    DATA@2MB len=%zu md5=%s\n", mid.size(), md5Hex(mid).c_str());
+        printf("    DATA@2MB head16=%s\n", toHex(Bytes(mid.begin(), mid.begin()+16)).c_str());
+      } else {
+        printf("    (资源过小，跳过加密区取样)\n");
+      }
     }
     report.decrypt = true;
 

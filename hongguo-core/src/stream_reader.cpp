@@ -66,6 +66,20 @@ StreamReader::RangeResult StreamReader::range(int64_t start, int64_t end) {
   return result;
 }
 
+std::string StreamReader::debugSampleDump(size_t count) const {
+  if (!prepared_) return {};
+  std::string out;
+  const size_t n = std::min(count, cenc_.samples.size());
+  out += "    SAMPLES=" + std::to_string(cenc_.samples.size()) + "\n";
+  for (size_t i = 0; i < n; ++i) {
+    const auto& s = cenc_.samples[i];
+    out += "    #" + std::to_string(i) + " start=" + std::to_string(s.start) +
+           " end=" + std::to_string(s.end) + " eoff=" +
+           std::to_string(s.encryptedOffset) + " iv=" + toHex(s.iv) + "\n";
+  }
+  return out;
+}
+
 void StreamReader::prepare() {
   if (prepared_) return;
 

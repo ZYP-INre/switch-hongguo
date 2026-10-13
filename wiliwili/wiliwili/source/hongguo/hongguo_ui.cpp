@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <random>
+#include <thread>
 #include <set>
 #include <stdexcept>
 
@@ -189,6 +190,15 @@ Series Core::randomFromPool(const std::string& excludeId) {
 }
 
 std::string Core::streamUrl() const { return impl_->url; }
+
+std::string Core::proxyStats() const {
+  if (!impl_->proxy) return "代理未启动";
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "mpv连接=%llu 已回=%.1fMB",
+                (unsigned long long)impl_->proxy->connectionCount(),
+                impl_->proxy->servedBytes() / 1048576.0);
+  return buf;
+}
 
 std::string Core::streamInfo() const {
   if (!impl_->reader) return "无会话";
@@ -625,12 +635,23 @@ void PlayerActivity::playIndex(size_t index) {
       }
       brls::Logger::info("hongguo: 第{}集 {}", shown, url);
       if (status) {
-        // ⚠ 地址必须显示出来。真机排查时它是唯一能判断
-        //   "代理到底监听在哪个端口" 的信息 —— 端口为 0 的话 mpv 永远连不上。
         status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
-                        quality + " · " + Core::instance().streamInfo() +
-                        " · " + Core::instance().streamUrl());
+                        quality + " · " + Core::instance().streamInfo());
       }
+      // 每秒刷新一次代理计数。
+      // 这是判断「mpv 有没有连上代理」的唯一办法：
+      //   连接数一直为 0 → mpv 根本没连（网络层/URL 的问题）
+      //   连接数 >0 但已回字节不涨 → 连上了但卡在读取
+      std::thread([this, alive] {
+        while (*alive) {
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+          if (!*alive) break;
+          brls::sync([this, alive] {
+            if (!*alive || !this->status) return;
+            this->status->setText(Core::instance().proxyStats());
+          });
+        }
+      }).detach();
       if (video) {
         video->hideLoading();
         // wiliwili 的 VideoView::setUrl 会给 mpv 带一个 network-timeout=5

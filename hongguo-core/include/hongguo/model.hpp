@@ -73,6 +73,10 @@ struct StreamInfo {
   std::string url;
   std::optional<Bytes> key;
   std::string quality;  // 如「1080P」
+  // 诊断用：派生密钥的原始输入（spade_a）与解析出的分集 ID。
+  // 两端结果不一致时，先看这两个是否相同 —— 不同说明拿到的根本不是一个视频。
+  std::string rawKey;
+  std::string episodeId;
 };
 
 }  // namespace hongguo

@@ -41,6 +41,11 @@ class LocalProxy {
 
   uint16_t port() const { return port_; }
 
+  // 诊断用：收到了多少条连接、回了多少字节。
+  // 真机上 mpv 若一直 0/0，先看这两个数 —— 都是 0 说明 mpv 根本没连上代理。
+  uint64_t connectionCount() const { return connections_.load(); }
+  uint64_t servedBytes() const { return servedBytes_.load(); }
+
  private:
   void acceptLoop();
   void handleConnection(int client);
@@ -52,6 +57,8 @@ class LocalProxy {
   int listenFd_ = -1;
   uint16_t port_ = 0;
   std::atomic<bool> running_{false};
+  std::atomic<uint64_t> connections_{0};
+  std::atomic<uint64_t> servedBytes_{0};
   std::thread worker_;
 };
 

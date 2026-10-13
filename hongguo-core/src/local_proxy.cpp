@@ -174,6 +174,7 @@ void LocalProxy::acceptLoop() {
 }
 
 void LocalProxy::handleConnection(int client) {
+  connections_.fetch_add(1);
   const std::string request = readRequest(client);
   if (request.empty()) return;
 
@@ -246,6 +247,7 @@ void LocalProxy::handleConnection(int client) {
       piece = reader_->read(at, chunk);
     }
     if (piece.empty()) break;
+    servedBytes_.fetch_add(piece.size());
     writeAll(client, reinterpret_cast<const char*>(piece.data()), piece.size());
     at += static_cast<int64_t>(piece.size());
   }
