@@ -16,7 +16,9 @@
 namespace hongguo {
 namespace {
 
-constexpr size_t kChunkSize = 256 * 1024;
+// 1MB（与 StreamReader::kMaxReadLength 一致）。原来 256KB 会让
+// 一次播放产生 4 倍的 Range 请求，每个都要走一次网络往返。
+constexpr size_t kChunkSize = 1024 * 1024;
 
 void writeAll(int fd, const char* data, size_t size) {
   size_t sent = 0;

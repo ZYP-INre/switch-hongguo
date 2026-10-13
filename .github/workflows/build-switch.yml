@@ -100,6 +100,25 @@ jobs:
           # NRO 的魔数在偏移 0x10（头部设计如此，不是文件开头）
           test "$(dd if=cmake-build-switch/hongguo.nro bs=1 skip=16 count=4 2>/dev/null)" = "NRO0"
 
+      # 「装到主页」那个 forwarder 的名字与图标是烤进 NSP 里的，
+      # 一旦配错只能靠真机发现。这里在构建期就把它的元信息打出来。
+      - name: 校验 forwarder 的应用名与图标
+        shell: bash
+        working-directory: wiliwili
+        run: |
+          NACP=$(find cmake-build-switch -name control.nacp | head -1)
+          ICON=$(find cmake-build-switch -name "icon_*.dat" | head -1)
+          echo "nacp: $NACP"
+          echo "icon: $ICON"
+          if [ -n "$NACP" ]; then
+            echo "forwarder 显示名: $(head -c 64 "$NACP" | tr -d '\000')"
+            echo "forwarder 作者:   $(dd if="$NACP" bs=1 skip=512 count=64 2>/dev/null | tr -d '\000')"
+          fi
+          # 图标应当是 hongguo.jpg 而不是 wiliwili 的 icon.jpg
+          if [ -n "$ICON" ]; then
+            echo "forwarder 图标大小: $(stat -c%s "$ICON") 字节（hongguo.jpg 应为 8072）"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: hongguo-nro

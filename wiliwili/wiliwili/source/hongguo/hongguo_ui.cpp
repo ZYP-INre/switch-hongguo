@@ -159,7 +159,9 @@ std::string Core::openStream(const std::string& episodeId, std::string& quality)
   const StreamInfo info = impl_->repo.stream(episodeId);
   quality = info.quality;
   impl_->reader = std::make_unique<StreamReader>(impl_->http, info);
-  impl_->reader->prepare();
+  // 用 warm() 而非 prepare()：前者会把 1MB 前缀都预取到本地。
+  // 只 prepare() 的话，起播后头几秒每次读取都要现去 CDN 拉，表现为一开始就卡。
+  impl_->reader->warm();
   impl_->proxy = std::make_unique<LocalProxy>();
   return impl_->proxy->start(*impl_->reader);
 }

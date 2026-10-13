@@ -5,11 +5,39 @@
 
 #include <cctype>
 #include <chrono>
+#include <mutex>
 #include <stdexcept>
 #include <thread>
 
 namespace hongguo {
 namespace {
+
+// ---- 连接复用 ----
+//
+// 原来每个请求都 curl_easy_init() 一个新 handle，用完即毁 —— 意味着每次 Range
+// 都要重做一遍 TCP + TLS 握手。Switch 上一次握手几百毫秒，一个 10MB 的视频
+// 拆成几十个 Range，光握手就十几秒，播放自然卡。
+//
+// curl_share 把连接缓存与 DNS 缓存跨 handle 共享，握手只做一次。
+// 跨线程使用共享句柄必须提供 lock/unlock 回调，否则 libcurl 不保证安全。
+std::mutex gShareMutex;
+CURLSH* gShare = nullptr;
+std::once_flag gShareOnce;
+
+void shareLock(CURL*, curl_lock_data, curl_lock_access, void*) { gShareMutex.lock(); }
+void shareUnlock(CURL*, curl_lock_data, void*) { gShareMutex.unlock(); }
+
+CURLSH* sharedCache() {
+  std::call_once(gShareOnce, [] {
+    gShare = curl_share_init();
+    if (!gShare) return;
+    curl_share_setopt(gShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
+    curl_share_setopt(gShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+    curl_share_setopt(gShare, CURLSHOPT_LOCKFUNC, shareLock);
+    curl_share_setopt(gShare, CURLSHOPT_UNLOCKFUNC, shareUnlock);
+  });
+  return gShare;
+}
 
 constexpr int kMaxAttempts = 3;
 constexpr int kConnectTimeoutSeconds = 20;
@@ -135,6 +163,8 @@ HttpResponse Http::performOnce(const std::string& url, const HeaderList& headers
   curl_easy_setopt(handle, CURLOPT_MAXREDIRS, 5L);
   curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(handle, CURLOPT_ACCEPT_ENCODING, "");  // 自动协商并解压
+  curl_easy_setopt(handle, CURLOPT_TCP_KEEPALIVE, 1L);
+  if (CURLSH* share = sharedCache()) curl_easy_setopt(handle, CURLOPT_SHARE, share);
   curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, sinkBody);
   curl_easy_setopt(handle, CURLOPT_WRITEDATA, &sink);
