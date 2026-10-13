@@ -20,12 +20,20 @@ namespace {
 //
 // curl_share 把连接缓存与 DNS 缓存跨 handle 共享，握手只做一次。
 // 跨线程使用共享句柄必须提供 lock/unlock 回调，否则 libcurl 不保证安全。
-std::mutex gShareMutex;
+// ⚠ 锁必须**按数据类型分开**，不能一把锁保护全部。
+//   libcurl 在同一次操作里会依次锁住不同类型（例如先 CONNECT 再 DNS），
+//   用单把非重入互斥量会当场死锁 —— 表现是请求永远挂住不回，界面一直"加载中"。
+//   这里照 libcurl 官方示例：每种 curl_lock_data 各一把锁。
+std::mutex gShareMutexes[CURL_LOCK_DATA_LAST];
 CURLSH* gShare = nullptr;
 std::once_flag gShareOnce;
 
-void shareLock(CURL*, curl_lock_data, curl_lock_access, void*) { gShareMutex.lock(); }
-void shareUnlock(CURL*, curl_lock_data, void*) { gShareMutex.unlock(); }
+void shareLock(CURL*, curl_lock_data data, curl_lock_access, void*) {
+  if (data < CURL_LOCK_DATA_LAST) gShareMutexes[data].lock();
+}
+void shareUnlock(CURL*, curl_lock_data data, void*) {
+  if (data < CURL_LOCK_DATA_LAST) gShareMutexes[data].unlock();
+}
 
 CURLSH* sharedCache() {
   std::call_once(gShareOnce, [] {
