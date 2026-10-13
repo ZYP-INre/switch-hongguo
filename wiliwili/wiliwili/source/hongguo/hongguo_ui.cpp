@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <random>
 #include <set>
 #include <stdexcept>
@@ -139,6 +140,7 @@ struct Core::Impl {
 
   std::unique_ptr<StreamReader> reader;
   std::unique_ptr<LocalProxy> proxy;
+  std::string url;   // 诊断用
 
   // 浏览页当前那一批剧，「换一部」从这儿随机挑
   std::vector<Series> pool;
@@ -169,7 +171,8 @@ std::string Core::openStream(const std::string& episodeId, std::string& quality)
   // 连接复用已经生效，后续按需拉取不必每次重新握手，起播后的流畅度有保障。
   impl_->reader->prepare();
   impl_->proxy = std::make_unique<LocalProxy>();
-  return impl_->proxy->start(*impl_->reader);
+  impl_->url = impl_->proxy->start(*impl_->reader);
+  return impl_->url;
 }
 
 void Core::setPool(std::vector<Series> items) { impl_->pool = std::move(items); }
@@ -183,6 +186,15 @@ Series Core::randomFromPool(const std::string& excludeId) {
   if (candidates.empty()) return {};
   std::uniform_int_distribution<size_t> pick(0, candidates.size() - 1);
   return impl_->pool[candidates[pick(impl_->rng)]];
+}
+
+std::string Core::streamUrl() const { return impl_->url; }
+
+std::string Core::streamInfo() const {
+  if (!impl_->reader) return "无会话";
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.1fMB", impl_->reader->total() / 1048576.0);
+  return buf;
 }
 
 void Core::closeStream() {
@@ -601,14 +613,21 @@ void PlayerActivity::playIndex(size_t index) {
     brls::sync([this, alive, url, quality, error, seriesTitle, shown] {
       if (!*alive) return;
       if (!error.empty()) {
+        // 失败时把代理状态也带出来，便于区分"没解析出来"和"解析出来了但播不动"
         if (video) video->hideLoading();
-        if (status) status->setText("播放失败：" + error);
+        if (status) {
+          status->setText("播放失败：" + error +
+                          "  [代理 " + (Core::instance().streamUrl().empty()
+                                            ? std::string("未启动")
+                                            : Core::instance().streamUrl()) + "]");
+        }
         return;
       }
       brls::Logger::info("hongguo: 第{}集 {}", shown, url);
       if (status) {
         status->setText(seriesTitle + " · 第 " + std::to_string(shown) + " 集 ·  " +
-                        quality + "   X 旋转   Y 换一部");
+                        quality + " · " + Core::instance().streamInfo() +
+                        "   X 旋转   Y 换一部");
       }
       if (video) {
         video->hideLoading();
