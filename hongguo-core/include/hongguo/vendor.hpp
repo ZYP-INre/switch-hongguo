@@ -22,6 +22,10 @@ inline constexpr std::string_view kVideoUserAgent = "com.phoenix.read/71332 (Lin
 // ---- 上游端点 ----
 
 inline constexpr std::string_view kVideoApi = "https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/";
+// 单集接口。批量接口 multi_video_model 自 2026-10-13 起一律返回 110001，
+// 这个仍然可用。
+inline constexpr std::string_view kSingleVideoApi =
+    "https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/";
 inline constexpr std::string_view kAppSearchApi = "https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v";
 inline constexpr std::string_view kSiteBase = "https://hongguoduanju.com";
 

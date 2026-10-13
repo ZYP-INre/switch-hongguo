@@ -787,16 +787,16 @@ Detail ContentRepo::detail(const std::string& seriesId) {
 StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
   if (!isSeriesId(episodeId)) throw std::runtime_error("分集 ID 不合法");
 
-  const std::string payload =
-      "{\"biz_param\":{\"detail_page_version\":0,\"device_level\":3,"
-      "\"disable_digg_stat\":false,\"need_all_video_definition\":true,"
-      "\"need_mp4_align\":false,\"use_os_player\":false,\"use_server_dns\":false,"
-      "\"video_platform\":1024},\"mixed_video_id_map\":{\"1004\":[\"" +
-      episodeId + "\"]}}";
+  // ⚠ 2026-10-13 起，批量接口 multi_video_model 对所有请求一律返回
+  //   110001（未知异常）—— 上游 hongguoTV 的 issue #16/#17 是同一天爆的，
+  //   他们的 Node 原实现同样失败，所以不是我们的移植问题。
+  //   同一域名下的**单集接口** video_model 仍然可用，body 只要一个 video_id。
+  //   两个接口返回的结构一致（data.video_model → fallback_api），换过去即可。
+  const std::string payload = "{\"video_id\":\"" + episodeId + "\"}";
 
   const Bytes body(payload.begin(), payload.end());
   const Signer::Request signedRequest =
-      signer_.sign(std::string(vendor::kVideoApi), deviceValues(), body);
+      signer_.sign(std::string(vendor::kSingleVideoApi), deviceValues(), body);
   const Json data = Json::parse(text(signedRequest.url, &signedRequest));
   const int code = jint(data, "Code", jint(data, "code", 0));
   if (code != 0) {
@@ -815,10 +815,19 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
   const Json* map = jobj(data, "data");
   if (!map) throw std::runtime_error("播放信息为空");
 
-  const Json* entry = jobj(*map, episodeId);
-  if (!entry) {
-    for (auto it = map->begin(); it != map->end() && !entry; ++it) {
-      if (it->is_object()) entry = &(*it);
+  // 单集接口：data 本身就是模型所在的条目。
+  // 批量接口（若将来恢复）：data 是按分集 id 分层的 map。
+  const Json* entry = nullptr;
+  // 注意 video_model 是个**字符串**（里面还嵌了一层 JSON），不是对象，
+  // 所以这里不能用只认对象的 jobj 去判断。
+  if (map->is_object() && map->find("video_model") != map->end()) {
+    entry = map;
+  } else {
+    entry = jobj(*map, episodeId);
+    if (!entry) {
+      for (auto it = map->begin(); it != map->end() && !entry; ++it) {
+        if (it->is_object()) entry = &(*it);
+      }
     }
   }
   if (!entry) throw std::runtime_error("播放信息为空");

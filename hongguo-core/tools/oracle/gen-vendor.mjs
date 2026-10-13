@@ -82,6 +82,10 @@ inline constexpr std::string_view kVideoUserAgent = ${JSON.stringify(api.VIDEO_U
 // ---- 上游端点 ----
 
 inline constexpr std::string_view kVideoApi = ${JSON.stringify(api.VIDEO_API)};
+// 单集接口。批量接口 multi_video_model 自 2026-10-13 起一律返回 110001，
+// 这个仍然可用。
+inline constexpr std::string_view kSingleVideoApi =
+    "https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/";
 inline constexpr std::string_view kAppSearchApi = ${JSON.stringify(api.APP_SEARCH_API)};
 inline constexpr std::string_view kSiteBase = "https://hongguoduanju.com";
 
