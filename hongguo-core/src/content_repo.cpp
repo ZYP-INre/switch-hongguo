@@ -798,8 +798,18 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
   const Signer::Request signedRequest =
       signer_.sign(std::string(vendor::kVideoApi), deviceValues(), body);
   const Json data = Json::parse(text(signedRequest.url, &signedRequest));
-  if (jint(data, "Code", jint(data, "code", 0)) != 0) {
-    throw std::runtime_error("播放接口暂不可用");
+  const int code = jint(data, "Code", jint(data, "code", 0));
+  if (code != 0) {
+    // 把上游的原始错误带出来。"播放接口暂不可用"这种笼统说法在排查时毫无用处 ——
+    // 上游报 110001（未知异常）还是参数错误，处理方式完全不同。
+    std::string message = jstr(data, "Message");
+    if (message.empty()) message = jstr(data, "message");
+    if (message.empty()) {
+      const Json* base = jobj(data, "BaseResp");
+      if (base) message = jstr(*base, "StatusMessage");
+    }
+    throw std::runtime_error("播放接口返回错误 code=" + std::to_string(code) +
+                             (message.empty() ? "" : "（" + message + "）"));
   }
 
   const Json* map = jobj(data, "data");
