@@ -625,9 +625,11 @@ void PlayerActivity::playIndex(size_t index) {
       }
       brls::Logger::info("hongguo: 第{}集 {}", shown, url);
       if (status) {
-        status->setText(seriesTitle + " · 第 " + std::to_string(shown) + " 集 ·  " +
+        // ⚠ 地址必须显示出来。真机排查时它是唯一能判断
+        //   "代理到底监听在哪个端口" 的信息 —— 端口为 0 的话 mpv 永远连不上。
+        status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
                         quality + " · " + Core::instance().streamInfo() +
-                        "   X 旋转   Y 换一部");
+                        " · " + Core::instance().streamUrl());
       }
       if (video) {
         video->hideLoading();
