@@ -37,6 +37,10 @@ set(FORWARDER_SRC "${PROJECT_SOURCE_DIR}/source/main.c" "${PROJECT_SOURCE_DIR}/s
 add_executable(${PROJECT_NAME} ${FORWARDER_SRC})
 target_link_libraries(${PROJECT_NAME} PRIVATE nx)
 target_compile_definitions(${PROJECT_NAME} PRIVATE VERSION="2.4.3")
+# 让 forwarder 去启动我们的 .nro，而不是写死的 wiliwili.nro
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    HG_NRO_FILE="${APP_OUTPUT_NAME}.nro"
+    HG_NRO_DIR="${APP_OUTPUT_NAME}")
 
 if (NOT PROJECT_KEYSET)
     SET(PROJECT_KEYSET "${PROJECT_BINARY_DIR}/prod.keys")

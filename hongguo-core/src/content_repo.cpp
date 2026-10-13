@@ -268,63 +268,6 @@ std::string decodeEntities(std::string value) {
   return value;
 }
 
-// 从 HTML 里取出所有 <script> 标签的属性表。
-// 只做属性扫描，不建 DOM —— 我们从不执行页面脚本，只需读它的 JSON 载荷。
-struct ScriptTag {
-  std::map<std::string, std::string> attrs;
-};
-
-std::vector<ScriptTag> scanScriptTags(const std::string& html) {
-  std::vector<ScriptTag> out;
-  size_t at = 0;
-  while (true) {
-    const size_t open = html.find("<script", at);
-    if (open == std::string::npos) break;
-    const size_t tagEnd = html.find('>', open);
-    if (tagEnd == std::string::npos) break;
-    const std::string tag = html.substr(open, tagEnd - open);
-
-    ScriptTag script;
-    size_t cursor = 7;  // 跳过 "<script"
-    while (cursor < tag.size()) {
-      while (cursor < tag.size() &&
-             (std::isspace(static_cast<unsigned char>(tag[cursor])) || tag[cursor] == '/')) {
-        ++cursor;
-      }
-      const size_t nameStart = cursor;
-      while (cursor < tag.size() && tag[cursor] != '=' && tag[cursor] != '>' &&
-             !std::isspace(static_cast<unsigned char>(tag[cursor]))) {
-        ++cursor;
-      }
-      if (cursor == nameStart) break;
-      const std::string name = tag.substr(nameStart, cursor - nameStart);
-      while (cursor < tag.size() && std::isspace(static_cast<unsigned char>(tag[cursor]))) ++cursor;
-      if (cursor >= tag.size() || tag[cursor] != '=') {
-        script.attrs[name] = "";
-        continue;
-      }
-      ++cursor;
-      while (cursor < tag.size() && std::isspace(static_cast<unsigned char>(tag[cursor]))) ++cursor;
-      if (cursor >= tag.size()) break;
-      const char quote = tag[cursor];
-      std::string value;
-      if (quote == '"' || quote == '\'') {
-        ++cursor;
-        const size_t close = tag.find(quote, cursor);
-        value = tag.substr(cursor, close == std::string::npos ? std::string::npos : close - cursor);
-        cursor = close == std::string::npos ? tag.size() : close + 1;
-      } else {
-        const size_t close = tag.find_first_of(" \t\r\n>", cursor);
-        value = tag.substr(cursor, close == std::string::npos ? std::string::npos : close - cursor);
-        cursor = close == std::string::npos ? tag.size() : close;
-      }
-      script.attrs[name] = decodeEntities(value);
-    }
-    out.push_back(std::move(script));
-    at = tagEnd;
-  }
-  return out;
-}
 
 // ---------------------------------------------------------- 排行榜 HTML 解析
 //
@@ -873,26 +816,47 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
     std::string key;
     const Json* item = nullptr;
   };
+  // 分两档收集：
+  //   rows     —— 首选（排除了 bytevc2，那类资源在标准 MP4 解复用器下只有音频没有视频轨）
+  //   fallback —— 兜底（任何有 main_url 的都算）
+  // 首选为空时用兜底，而不是直接报错。上游返回的资源组合是变化的，
+  // 「全都被排除掉」这种情况真的会出现，不该让用户看到失败。
   std::vector<Candidate> rows;
+  std::vector<Candidate> fallbackRows;
+  size_t total = 0;
+  size_t noUrl = 0;
+  size_t badCodec = 0;
+
   for (auto it = videoList->begin(); it != videoList->end(); ++it) {
     if (!it->is_object()) continue;
+    ++total;
+
     const std::string mainUrl = jstr(*it, "main_url");
-    if (mainUrl.empty()) continue;
+    if (mainUrl.empty()) {
+      ++noUrl;
+      continue;
+    }
     const std::string codec = [&] {
       std::string value = jstr(*it, "codec_type");
       for (char& ch : value) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       return value;
     }();
-    // ByteVC2 资源在标准 MP4 解复用器下只有音频没有视频轨，必须排除
-    if (codec == "bytevc2" || codec == "bvc2") continue;
+    const bool bytevc2 = (codec == "bytevc2" || codec == "bvc2");
+    if (bytevc2) ++badCodec;
 
     std::string label = jstr(*it, "quality_desc");
     if (label.empty()) label = jstr(*it, "height");
     if (label.empty()) label = jstr(*it, "vheight");
     if (label.empty()) label = jstr(*it, "quality");
     if (label.empty()) label = it.key();
-    rows.push_back(Candidate{qualityNumber(label), it.key(), &(*it)});
+
+    Candidate candidate{qualityNumber(label), it.key(), &(*it)};
+    fallbackRows.push_back(candidate);
+    if (!bytevc2) rows.push_back(candidate);
   }
+
+  // 首选全被排除时回退到兜底，而不是直接失败
+  if (rows.empty() && !fallbackRows.empty()) rows = fallbackRows;
   // 清晰度降序；同档时按键名升序，保证结果可复现
   std::sort(rows.begin(), rows.end(), [](const Candidate& a, const Candidate& b) {
     if (a.quality != b.quality) return a.quality > b.quality;
@@ -907,7 +871,12 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
     }
   }
   if (!selected && !rows.empty()) selected = &rows.back();
-  if (!selected) throw std::runtime_error("没有可播放的清晰度，请稍后再试或选择其他剧集");
+  if (!selected) {
+    // 报错要能看出是"上游没给"还是"给了但都被过滤了"
+    throw std::runtime_error(
+        "没有可播放的清晰度（上游返回 " + std::to_string(total) + " 档：无地址 " +
+        std::to_string(noUrl) + "，bytevc2 " + std::to_string(badCodec) + "）");
+  }
 
   std::string url = cleanUrl(jstr(*selected->item, "main_url"));
   const std::string seedText = jstr(*info, "key_seed");

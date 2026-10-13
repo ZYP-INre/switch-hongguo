@@ -4,8 +4,21 @@
 #include <unistd.h>
 
 #define HBMENU_NRO "sdmc:/hbmenu.nro"
-#define DEFAULT_NRO "sdmc:/switch/wiliwili.nro"
-#define APP_STORE_NRO "sdmc:/switch/wiliwili/wiliwili.nro"
+
+// ⚠ 这两个路径决定「装到主页」的图标点下去启动谁。
+//   原来是写死的 sdmc:/switch/wiliwili.nro —— 所以装了红果的 forwarder
+//   也只会去启动 wiliwili；SD 卡上没有 wiliwili.nro 时更是直接回落到 hbmenu。
+//   现在由 CMake 用 APP_OUTPUT_NAME 注入，兜底值保持原样。
+#ifndef HG_NRO_FILE
+#define HG_NRO_FILE "wiliwili.nro"
+#endif
+#ifndef HG_NRO_DIR
+#define HG_NRO_DIR "wiliwili"
+#endif
+
+// 相邻字符串字面量在 C 里会自动拼接
+#define DEFAULT_NRO "sdmc:/switch/" HG_NRO_FILE
+#define APP_STORE_NRO "sdmc:/switch/" HG_NRO_DIR "/" HG_NRO_FILE
 
 const char g_noticeText[] =
     "nx-hbloader " VERSION
