@@ -30,29 +30,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 镜像自带 devkitA64 与 libnx；其余依赖需另装。
-      # switch-curl 是内容层的 HTTP 依赖；switch-nspmini + hacBrewPack 用于生成 forwarder。
+      # 镜像自带 devkitA64、libnx，**以及下面这一整串依赖**。
+      # 这一点是从成功那次的日志里核实的：所有包都是
+      # "is up to date -- skipping ... there is nothing to do"，一个字节都没下载。
+      #
+      # 所以这里先用本地数据库判断（dkp-pacman -Q 不联网），齐全就完全不碰网络。
+      # 以前每次都无条件 `-Sy`，而 pkg.devkitpro.org 会被 Cloudflare 按 TLS 指纹
+      # 间歇性返回 403 —— 同一天里同样的代码，有的构建过、有的六次重试全 403，
+      # 整次构建白跑。既然同步只起到"更新版本号"的作用，那就没必要为它冒险。
+      # 只有镜像换代、真缺包时，才退回联网路径（那时再忍受那个 403）。
       - name: 安装依赖包
         shell: bash
         run: |
-          # ⚠ 源站是间歇性的：pkg.devkitpro.org 会随 Cloudflare 的心情返回 403。
-          #   实测十几次构建里会偶发一两次，一旦撞上整次构建就废了。
-          #   重试到成功为止（最多 6 次），比重新触发一次完整构建便宜得多。
-          for attempt in 1 2 3 4 5 6; do
-            if dkp-pacman -Sy --noconfirm; then
-              echo "数据库同步成功（第 $attempt 次）"
-              break
-            fi
-            echo "第 $attempt 次同步失败（源站 403 是间歇性的），15 秒后重试…"
-            sleep 15
-            if [ "$attempt" = "6" ]; then echo "六次都失败，放弃"; exit 1; fi
+          PKGS="switch-curl switch-zlib switch-mbedtls switch-dav1d
+                switch-glfw switch-mesa switch-libwebp switch-freetype switch-harfbuzz
+                switch-libpng switch-libjpeg-turbo switch-libass switch-liblua51
+                switch-libplacebo switch-glm switch-glad switch-bzip2 switch-liblzma
+                switch-pkg-config switch-tools switch-cmake dkp-toolchain-vars"
+
+          missing=""
+          for p in $PKGS; do
+            if ! dkp-pacman -Q "$p" >/dev/null 2>&1; then missing="$missing $p"; fi
           done
-          dkp-pacman -S --noconfirm --needed \
-            switch-curl switch-zlib switch-mbedtls switch-dav1d \
-            switch-glfw switch-mesa switch-libwebp switch-freetype switch-harfbuzz \
-            switch-libpng switch-libjpeg-turbo switch-libass switch-liblua51 \
-            switch-libplacebo switch-glm switch-glad switch-bzip2 switch-liblzma \
-            switch-pkg-config switch-tools switch-cmake dkp-toolchain-vars
+
+          if [ -z "$missing" ]; then
+            echo "镜像里依赖已齐全，跳过联网同步"
+          else
+            echo "缺少:$missing —— 需要联网同步（源站 403 是间歇性的）"
+            for attempt in 1 2 3 4 5 6; do
+              if dkp-pacman -Sy --noconfirm; then
+                echo "数据库同步成功（第 $attempt 次）"
+                break
+              fi
+              echo "第 $attempt 次同步失败，15 秒后重试…"
+              sleep 15
+              if [ "$attempt" = "6" ]; then echo "六次都失败，放弃"; exit 1; fi
+            done
+            dkp-pacman -S --noconfirm --needed $missing
+          fi
+
+          # 真正的判据是 pkg-config 描述文件在不在 —— 缺了要在这里就报出来，
+          # 不能拖到 cmake 阶段变成一个看不懂的 find_package 失败。
+          for pc in libcurl dav1d libass freetype2 harfbuzz libpng libjpeg libwebp \
+                    liblzma zlib mbedtls lua51 libplacebo glfw3 libglad; do
+            if [ ! -f "/opt/devkitpro/portlibs/switch/lib/pkgconfig/$pc.pc" ]; then
+              echo "缺少 pkg-config 描述文件: $pc.pc"; exit 1
+            fi
+          done
+          echo "依赖自检通过"
 
       # ⚠ 这四个包都不在 devkitPro 官方源里，是 wiliwili 托管在 GitHub releases 上的：
       #     ffmpeg / libmpv —— devkitPro 自带的版本不支持网络流（我们要播本地代理的 HTTP 流）
