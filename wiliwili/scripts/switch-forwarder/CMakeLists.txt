@@ -33,7 +33,14 @@ if (NOT DEFINED APP_OUTPUT_NAME)
     set(APP_OUTPUT_NAME ${PROJECT_NAME})
 endif ()
 message(STATUS "forwarder 元信息: title=[${APP_DISPLAY_TITLE}] author=[${APP_DISPLAY_AUTHOR}] out=[${APP_OUTPUT_NAME}] PROJECT_NAME=[${PROJECT_NAME}]")
-set(PROJECT_TITLEID "010ff000ffff0001")
+# ⚠ title_id 决定主界面上是不是同一个条目。
+#   wiliwili 官方的 forwarder 用的就是 010ff000ffff0001 —— 沿用的话两者会互相顶替，
+#   装了红果就顶掉 wiliwili（或反之），无法共存。
+#   父 CMakeLists 用 APP_TITLEID 传入不同的值，两个图标就能各自独立存在。
+if (NOT DEFINED APP_TITLEID)
+    set(APP_TITLEID "010ff000ffff0001")
+endif ()
+set(PROJECT_TITLEID "${APP_TITLEID}")
 set(FORWARDER_SRC "${PROJECT_SOURCE_DIR}/source/main.c" "${PROJECT_SOURCE_DIR}/source/trampoline.s")
 add_executable(${PROJECT_NAME} ${FORWARDER_SRC})
 target_link_libraries(${PROJECT_NAME} PRIVATE nx)

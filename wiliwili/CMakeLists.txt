@@ -105,11 +105,15 @@ if (HONGGUO_UI)
     set(APP_DISPLAY_TITLE "红果短剧")
     set(APP_DISPLAY_AUTHOR "hongguo-switch")
     set(APP_OUTPUT_NAME "hongguo")
+    # 与 wiliwili 官方的 forwarder（010ff000ffff0001）区分开，
+    # 这样主界面上红果和 wiliwili 可以各占一个图标、互不顶替。
+    set(APP_TITLEID "010ff000ffff8801")
     set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/hongguo.jpg)
 else ()
     set(APP_DISPLAY_TITLE ${PROJECT_NAME})
     set(APP_DISPLAY_AUTHOR ${PROJECT_AUTHOR})
     set(APP_OUTPUT_NAME ${PROJECT_NAME})
+    set(APP_TITLEID "010ff000ffff0001")
 endif ()
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
