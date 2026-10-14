@@ -37,12 +37,6 @@ class Core {
   std::string openStream(const std::string& episodeId, std::string& quality);
   void closeStream();
 
-  // 诊断用：当前代理地址 / 资源大小。真机排查时显示在播放页上，
-  // 便于区分「没解析出地址」和「解析出来了但播不动」。
-  std::string streamUrl() const;
-  std::string streamInfo() const;
-  // 诊断用：代理收到的连接数 / 已回字节数
-  std::string proxyStats() const;
 
   // 浏览页当前那一批剧。播放页的「换一部」从这里随机挑。
   void setPool(std::vector<Series> items);

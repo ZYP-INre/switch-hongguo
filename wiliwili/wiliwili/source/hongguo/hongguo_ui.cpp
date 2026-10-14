@@ -189,24 +189,6 @@ Series Core::randomFromPool(const std::string& excludeId) {
   return impl_->pool[candidates[pick(impl_->rng)]];
 }
 
-std::string Core::streamUrl() const { return impl_->url; }
-
-std::string Core::proxyStats() const {
-  if (!impl_->proxy) return "代理未启动";
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "mpv连接=%llu 已回=%.1fMB",
-                (unsigned long long)impl_->proxy->connectionCount(),
-                impl_->proxy->servedBytes() / 1048576.0);
-  return buf;
-}
-
-std::string Core::streamInfo() const {
-  if (!impl_->reader) return "无会话";
-  char buf[64];
-  std::snprintf(buf, sizeof(buf), "%.1fMB", impl_->reader->total() / 1048576.0);
-  return buf;
-}
-
 void Core::closeStream() {
   if (impl_->proxy) {
     impl_->proxy->stop();
@@ -623,28 +605,14 @@ void PlayerActivity::playIndex(size_t index) {
     brls::sync([this, alive, url, quality, error, seriesTitle, shown] {
       if (!*alive) return;
       if (!error.empty()) {
-        // 失败时把代理状态也带出来，便于区分"没解析出来"和"解析出来了但播不动"
         if (video) video->hideLoading();
-        if (status) {
-          status->setText("播放失败：" + error +
-                          "  [代理 " + (Core::instance().streamUrl().empty()
-                                            ? std::string("未启动")
-                                            : Core::instance().streamUrl()) + "]");
-        }
+        if (status) status->setText("播放失败：" + error);
         return;
       }
       brls::Logger::info("hongguo: 第{}集 {}", shown, url);
       if (status) {
-        status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
-                        quality + " · " + Core::instance().streamInfo());
-      }
-      // 代理计数改为**用户按键查看**，不再起定时线程。
-      // （之前用 detach 线程每秒刷界面：跨线程读写 bool 是数据竞争，
-      //   线程生命周期也不受控，真机上直接崩溃。）
-      if (status) {
-        status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
-                        quality + " · " + Core::instance().streamInfo() +
-                        "   X 旋转   Y 换一部   L 代理状态");
+        status->setText(seriesTitle + " · 第" + std::to_string(shown) + " / " +
+                        std::to_string(impl_->episodes.size()) + " 集 · " + quality);
       }
       if (video) {
         video->hideLoading();
@@ -711,11 +679,29 @@ void PlayerActivity::onContentAvailable() {
                          return true;
                        });
 
-  // L：显示代理计数。判断「mpv 有没有连上代理」就靠它 ——
-  // 连接数一直为 0 说明 mpv 根本没连；>0 但已回字节不涨说明连上了读不动。
-  this->registerAction("代理状态", brls::ControllerButton::BUTTON_LB,
+  // 方向键左右：快退 / 快进 10 秒。
+  // 把快进快退放在这里，是为了把 R 键腾出来给「下一集」——
+  // wiliwili 原本把 L/R 绑成播放列表的上一项/下一项，和我们要的功能冲突。
+  this->registerAction("快退", brls::ControllerButton::BUTTON_LEFT,
+                       [](brls::View*) {
+                         MPVCore::instance().seekRelative(-10);
+                         return true;
+                       });
+  this->registerAction("快进", brls::ControllerButton::BUTTON_RIGHT,
+                       [](brls::View*) {
+                         MPVCore::instance().seekRelative(10);
+                         return true;
+                       });
+
+  // R：直接切下一集。比「等这集播完自动切」更常用 ——
+  // 短剧一集就一两分钟，多数人是跳着看的。
+  this->registerAction("下一集", brls::ControllerButton::BUTTON_RB,
                        [this](brls::View*) {
-                         brls::Application::notify(Core::instance().proxyStats());
+                         if (impl_->index + 1 < impl_->episodes.size()) {
+                           this->playIndex(impl_->index + 1);
+                         } else {
+                           brls::Application::notify("已经是最后一集");
+                         }
                          return true;
                        });
 
