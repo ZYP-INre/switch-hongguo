@@ -638,20 +638,14 @@ void PlayerActivity::playIndex(size_t index) {
         status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
                         quality + " · " + Core::instance().streamInfo());
       }
-      // 每秒刷新一次代理计数。
-      // 这是判断「mpv 有没有连上代理」的唯一办法：
-      //   连接数一直为 0 → mpv 根本没连（网络层/URL 的问题）
-      //   连接数 >0 但已回字节不涨 → 连上了但卡在读取
-      std::thread([this, alive] {
-        while (*alive) {
-          std::this_thread::sleep_for(std::chrono::seconds(1));
-          if (!*alive) break;
-          brls::sync([this, alive] {
-            if (!*alive || !this->status) return;
-            this->status->setText(Core::instance().proxyStats());
-          });
-        }
-      }).detach();
+      // 代理计数改为**用户按键查看**，不再起定时线程。
+      // （之前用 detach 线程每秒刷界面：跨线程读写 bool 是数据竞争，
+      //   线程生命周期也不受控，真机上直接崩溃。）
+      if (status) {
+        status->setText(seriesTitle + " · 第" + std::to_string(shown) + "集 · " +
+                        quality + " · " + Core::instance().streamInfo() +
+                        "   X 旋转   Y 换一部   L 代理状态");
+      }
       if (video) {
         video->hideLoading();
         // wiliwili 的 VideoView::setUrl 会给 mpv 带一个 network-timeout=5
@@ -714,6 +708,14 @@ void PlayerActivity::onContentAvailable() {
                              "set", "video-rotate", std::to_string(impl_->rotation));
                          brls::Application::notify(
                              "画面旋转 " + std::to_string(impl_->rotation) + "°");
+                         return true;
+                       });
+
+  // L：显示代理计数。判断「mpv 有没有连上代理」就靠它 ——
+  // 连接数一直为 0 说明 mpv 根本没连；>0 但已回字节不涨说明连上了读不动。
+  this->registerAction("代理状态", brls::ControllerButton::BUTTON_LB,
+                       [this](brls::View*) {
+                         brls::Application::notify(Core::instance().proxyStats());
                          return true;
                        });
 
