@@ -281,6 +281,25 @@ void BrowseActivity::onContentAvailable() {
   }
 #endif
 
+  // 随机播放：随便挑一部，从第一集开始连播。
+  // 抖音式的入口 —— 不挑片，直接看。
+  {
+    auto* button = new brls::Button();
+    button->setText("随机播放");
+    button->setMargins(0, 24, 0, 8);
+    button->registerClickAction([this](brls::View*) {
+      const Series pick = Core::instance().randomFromPool(std::string());
+      if (pick.id.empty()) {
+        brls::Application::notify("列表还没加载好，稍后再试");
+        return true;
+      }
+      brls::Application::pushActivity(new PlayerActivity(pick));
+      return true;
+    });
+    button->addGestureRecognizer(new brls::TapGestureRecognizer(button));
+    this->modes->addView(button);
+  }
+
   // 搜索入口
   {
     auto* button = new brls::Button();
@@ -668,7 +687,29 @@ void PlayerActivity::startSeries(Series series) {
 }
 
 void PlayerActivity::onContentAvailable() {
-  // X：旋转画面。短剧是 9:16，Switch 屏是 16:9，直着播左右必留大片黑边。
+  // 默认就把画面转 90°。
+  // 短剧是 9:16，Switch 屏是 16:9 —— 不转的话左右大片黑边，只用到 1/3 宽度。
+  // 转过来侧着拿机器，画面就是铺满的。（borealis 不支持整体 UI 旋转，
+  // 所以状态文字与 OSD 依旧是横屏方向，这个另说。）
+  MPVCore::instance().command_async("set", "video-rotate", "90");
+  impl_->rotation = 90;
+
+  // 方向键上：随机换下一部。
+  // 这就是抖音那套信息流 —— 不想看了往上一推就换一部，不用退回列表。
+  this->registerAction("换下一部", brls::ControllerButton::BUTTON_UP,
+                       [this](brls::View*) {
+                         const Series next =
+                             Core::instance().randomFromPool(impl_->series.id);
+                         if (next.id.empty()) {
+                           brls::Application::notify("没有可切换的剧");
+                           return true;
+                         }
+                         brls::Application::notify("下一部：" + next.title);
+                         this->startSeries(next);
+                         return true;
+                       });
+
+  // X：手动旋转（默认已转 90°，按一下转回 0° 再按回 90°）。
   this->registerAction("旋转画面", brls::ControllerButton::BUTTON_X,
                        [this](brls::View*) {
                          impl_->rotation = (impl_->rotation + 90) % 360;
