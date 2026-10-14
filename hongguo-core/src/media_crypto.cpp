@@ -362,7 +362,14 @@ Prepared prepare(const Bytes& data, const std::optional<Bytes>& key) {
         throw std::runtime_error("原始编码格式缺失");
       }
       if (frma.body + 4 > frma.end) throw std::runtime_error("原始编码格式无效");
-      const Bytes original(data.begin() + frma.body, data.begin() + frma.body + 4);
+      Bytes original(data.begin() + frma.body, data.begin() + frma.body + 4);
+      // ⚠ 字节的私有编码要映射成 FFmpeg 认的通用 fourcc：
+      //   bvc1 = ByteVC1，本质是 HEVC，只是套了私有标签。
+      //   不改的话容器里写着 bvc1，FFmpeg/mpv 报 "unknown codec"，
+      //   表现就是有画面框、时长也对，但永远 0/0 不播。
+      //   （实测：ffprobe 直连我们的代理，改前 codec_name=unknown，改后 =hevc）
+      const std::string tag(original.begin(), original.end());
+      if (tag == "bvc1") original = Bytes{'h', 'v', 'c', '1'};
       for (int64_t entryAt = sinf.start - 1; entryAt >= stbl.body; --entryAt) {
         const std::string type = asciiAt(data, static_cast<size_t>(entryAt), 4);
         if (type == "encv" || type == "enca") {

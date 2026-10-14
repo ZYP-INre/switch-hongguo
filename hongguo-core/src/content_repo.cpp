@@ -715,7 +715,13 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
   //   他们的 Node 原实现同样失败，所以不是我们的移植问题。
   //   同一域名下的**单集接口** video_model 仍然可用，body 只要一个 video_id。
   //   两个接口返回的结构一致（data.video_model → fallback_api），换过去即可。
-  const std::string payload = "{\"video_id\":\"" + episodeId + "\"}";
+  // ⚠ 必须带 need_all_video_definition。实测同一集：
+  //     仅 video_id              → 1 档，且是 bytevc2（FFmpeg 解不了，播出来是 0/0）
+  //     +need_all_video_definition → 5 档，多出 bytevc1 等可用档位
+  const std::string payload =
+      "{\"video_id\":\"" + episodeId +
+      "\",\"biz_param\":{\"detail_page_version\":0,\"device_level\":3,"
+      "\"need_all_video_definition\":true,\"video_platform\":1024}}";
 
   const Bytes body(payload.begin(), payload.end());
   const Signer::Request signedRequest =
@@ -835,8 +841,12 @@ StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
     if (!bytevc2) rows.push_back(candidate);
   }
 
-  // 首选全被排除时回退到兜底，而不是直接失败
-  if (rows.empty() && !fallbackRows.empty()) rows = fallbackRows;
+  // ⚠ 不回退到 bytevc2。
+  //   bytevc2 在容器里完全合法（所以大小、时长都读得出来），
+  //   但 FFmpeg/mpv 没有对应解码器 —— 选它的结果就是"有画面框但 0/0 不播"。
+  //   宁可明确报错，也不要静默选一个放不了的编码
+  //   （实测：用了 ffprobe 才看出来是 "unknown codec (bvc2)"）。
+  (void)fallbackRows;
   // 清晰度降序；同档时按键名升序，保证结果可复现
   std::sort(rows.begin(), rows.end(), [](const Candidate& a, const Candidate& b) {
     if (a.quality != b.quality) return a.quality > b.quality;
