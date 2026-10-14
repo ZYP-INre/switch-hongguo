@@ -450,7 +450,7 @@ void SearchActivity::onContentAvailable() {
   });
 
   // Y 键随时重新输入（与 wiliwili 搜索页一致的手感）
-  this->registerAction("输入关键词", brls::ControllerButton::BUTTON_Y,
+  this->registerAction("搜索", brls::ControllerButton::BUTTON_Y,
                        [this](brls::View*) {
                          this->prompt();
                          return true;
@@ -706,7 +706,7 @@ void PlayerActivity::startSeries(Series series) {
 void PlayerActivity::onContentAvailable() {
   // 方向键上：随机换下一部。
   // 这就是抖音那套信息流 —— 不想看了往上一推就换一部，不用退回列表。
-  this->registerAction("换下一部", brls::ControllerButton::BUTTON_UP,
+  this->registerAction("下剧", brls::ControllerButton::BUTTON_UP,
                        [this](brls::View*) {
                          const Series next =
                              Core::instance().randomFromPool(impl_->series.id);
@@ -720,7 +720,7 @@ void PlayerActivity::onContentAvailable() {
                        });
 
   // X：手动切换旋转角度（自动判断不准时用）。
-  this->registerAction("旋转画面", brls::ControllerButton::BUTTON_X,
+  this->registerAction("旋转", brls::ControllerButton::BUTTON_X,
                        [this](brls::View*) {
                          impl_->rotation = (impl_->rotation + 90) % 360;
                          MPVCore::instance().command_async(
@@ -746,7 +746,7 @@ void PlayerActivity::onContentAvailable() {
 
   // R：直接切下一集。比「等这集播完自动切」更常用 ——
   // 短剧一集就一两分钟，多数人是跳着看的。
-  this->registerAction("下一集", brls::ControllerButton::BUTTON_RB,
+  this->registerAction("下集", brls::ControllerButton::BUTTON_RB,
                        [this](brls::View*) {
                          if (impl_->index + 1 < impl_->episodes.size()) {
                            this->playIndex(impl_->index + 1);
@@ -756,46 +756,6 @@ void PlayerActivity::onContentAvailable() {
                          return true;
                        });
 
-  // Y：随机换一部别的剧
-  this->registerAction("换一部", brls::ControllerButton::BUTTON_Y,
-                       [this](brls::View*) {
-                         const Series next =
-                             Core::instance().randomFromPool(impl_->series.id);
-                         if (next.id.empty()) {
-                           brls::Application::notify("没有可切换的剧");
-                           return true;
-                         }
-                         brls::Application::notify("换一部：" + next.title);
-                         this->startSeries(next);
-                         return true;
-                       });
-
-  // 一集播完自动接下一集
-  auto alive = impl_->alive;
-  impl_->eventSub = MPV_E->subscribe([this, alive](MpvEventEnum event) {
-    if (!*alive) return;
-    if (event == MpvEventEnum::END_OF_FILE) {
-      this->onEpisodeEnded();
-      return;
-    }
-    if (event == MpvEventEnum::MPV_LOADED) {
-      // 按**视频实际尺寸**决定要不要转，而不是写死。
-      // 短剧基本都是 9:16 竖屏，但真人剧里也混着横屏资源 ——
-      // 一律转 90° 会把横屏的转歪，一律不转则竖屏只用到 1/3 宽度。
-      // getInt 直接读 mpv 属性，此时 demuxer 已打开，宽高是准的。
-      brls::sync([this, alive] {
-        if (!*alive) return;
-        const int64_t w = MPVCore::instance().getInt("width");
-        const int64_t h = MPVCore::instance().getInt("height");
-        if (w <= 0 || h <= 0) return;
-        const int target = (h > w) ? 90 : 0;   // 竖屏转，横屏不转
-        if (target != impl_->rotation) {
-          impl_->rotation = target;
-          MPVCore::instance().command_async("set", "video-rotate", std::to_string(target));
-        }
-      });
-    }
-  });
   impl_->subscribed = true;
 
   if (impl_->episodes.empty()) {

@@ -305,7 +305,9 @@ VideoView::VideoView() {
     };
     this->videoQuality->getParent()->registerClickAction(qualityFunc);
     this->videoQuality->getParent()->addGestureRecognizer(new brls::TapGestureRecognizer(videoQuality->getParent()));
-    this->registerAction("wiliwili/player/quality"_i18n, brls::ControllerButton::BUTTON_START, qualityFunc);
+    // 红果的流是上游给的固定清晰度，没有多档可选，这个「+ 画质」入口没有意义，
+    // 只会占满底部提示栏。若要恢复，取消下面这行注释即可。
+    // this->registerAction("wiliwili/player/quality"_i18n, brls::ControllerButton::BUTTON_START, qualityFunc);
 
     /// 视频详情信息
     auto profileFunc = [this](...) {
