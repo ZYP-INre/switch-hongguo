@@ -687,13 +687,6 @@ void PlayerActivity::startSeries(Series series) {
 }
 
 void PlayerActivity::onContentAvailable() {
-  // 默认就把画面转 90°。
-  // 短剧是 9:16，Switch 屏是 16:9 —— 不转的话左右大片黑边，只用到 1/3 宽度。
-  // 转过来侧着拿机器，画面就是铺满的。（borealis 不支持整体 UI 旋转，
-  // 所以状态文字与 OSD 依旧是横屏方向，这个另说。）
-  MPVCore::instance().command_async("set", "video-rotate", "90");
-  impl_->rotation = 90;
-
   // 方向键上：随机换下一部。
   // 这就是抖音那套信息流 —— 不想看了往上一推就换一部，不用退回列表。
   this->registerAction("换下一部", brls::ControllerButton::BUTTON_UP,
@@ -709,7 +702,7 @@ void PlayerActivity::onContentAvailable() {
                          return true;
                        });
 
-  // X：手动旋转（默认已转 90°，按一下转回 0° 再按回 90°）。
+  // X：手动切换旋转角度（自动判断不准时用）。
   this->registerAction("旋转画面", brls::ControllerButton::BUTTON_X,
                        [this](brls::View*) {
                          impl_->rotation = (impl_->rotation + 90) % 360;
@@ -763,9 +756,28 @@ void PlayerActivity::onContentAvailable() {
   // 一集播完自动接下一集
   auto alive = impl_->alive;
   impl_->eventSub = MPV_E->subscribe([this, alive](MpvEventEnum event) {
-    if (event != MpvEventEnum::END_OF_FILE) return;
     if (!*alive) return;
-    this->onEpisodeEnded();
+    if (event == MpvEventEnum::END_OF_FILE) {
+      this->onEpisodeEnded();
+      return;
+    }
+    if (event == MpvEventEnum::MPV_LOADED) {
+      // 按**视频实际尺寸**决定要不要转，而不是写死。
+      // 短剧基本都是 9:16 竖屏，但真人剧里也混着横屏资源 ——
+      // 一律转 90° 会把横屏的转歪，一律不转则竖屏只用到 1/3 宽度。
+      // getInt 直接读 mpv 属性，此时 demuxer 已打开，宽高是准的。
+      brls::sync([this, alive] {
+        if (!*alive) return;
+        const int64_t w = MPVCore::instance().getInt("width");
+        const int64_t h = MPVCore::instance().getInt("height");
+        if (w <= 0 || h <= 0) return;
+        const int target = (h > w) ? 90 : 0;   // 竖屏转，横屏不转
+        if (target != impl_->rotation) {
+          impl_->rotation = target;
+          MPVCore::instance().command_async("set", "video-rotate", std::to_string(target));
+        }
+      });
+    }
   });
   impl_->subscribed = true;
 
