@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "hongguo/http.hpp"
 #include "hongguo/stream_reader.hpp"
@@ -52,6 +53,10 @@ class LocalProxy {
 
   // 连接之间并发，但对 reader 的读取必须串行
   std::mutex readerMutex_;
+  // 每条连接一个线程。必须由 stop() 全部 join 之后再让调用方销毁 reader ——
+  // 否则线程还在用 reader 时它已被释放，就是 use-after-free。
+  std::mutex workersMutex_;
+  std::vector<std::thread> workers_;
 
   StreamReader* reader_ = nullptr;
   int listenFd_ = -1;

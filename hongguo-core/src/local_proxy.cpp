@@ -6,6 +6,7 @@
 #include <netinet/tcp.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -139,16 +140,29 @@ std::string LocalProxy::start(StreamReader& reader) {
 
 void LocalProxy::stop() {
   if (!running_.exchange(false)) return;
+
   if (listenFd_ >= 0) {
     ::shutdown(listenFd_, SHUT_RDWR);
     ::close(listenFd_);
     listenFd_ = -1;
   }
-  if (worker_.joinable()) worker_.join();
+  if (worker_.joinable()) worker_.join();   // 等 accept 线程退出
+
+  // ⚠ 必须把**每条连接**的线程也等回来，再让调用方销毁 reader。
+  //   之前只 join 了 accept 线程，连接线程还在用 reader 时它就被 reset() 了 ——
+  //   快速切换剧集/剧时最容易撞上：上一部的连接没断，新的一次 closeStream
+  //   就把 reader 拆掉，直接 use-after-free，表现为卡死、退不出、崩溃。
+  std::vector<std::thread> pending;
+  {
+    std::lock_guard<std::mutex> guard(workersMutex_);
+    pending.swap(workers_);
+  }
+  for (std::thread& t : pending) {
+    if (t.joinable()) t.join();
+  }
 }
 
 void LocalProxy::acceptLoop() {
-  std::vector<std::thread> workers;
   while (running_) {
     const int client = ::accept(listenFd_, nullptr, nullptr);
     if (client < 0) {
@@ -159,17 +173,24 @@ void LocalProxy::acceptLoop() {
     int on = 1;
     ::setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 #endif
+    // ⚠ 必须设发送超时。
+    //   对端（mpv）若不读数据，socket 缓冲区写满后 send() 会永久阻塞；
+    //   而 stop() 要等这条连接的线程结束 —— 于是整个 stop() 卡住、界面冻死。
+    //   有超时后 send 最多等这么久就返回错误，线程得以退出。
+    struct timeval sendTimeout {};
+    sendTimeout.tv_sec = 5;
+    ::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
     // ⚠ 每个连接必须独立线程处理。
     //   mpv 经常同时开多条连接（读 moov、读数据、seek 时另开）。
     //   原来在 accept 循环里同步处理，第一条连接不结束第二条就进不来 ——
     //   mpv 等不到响应，表现就是进度 0/0、一直转圈。
-    workers.emplace_back([this, client] {
-      handleConnection(client);
-      ::close(client);
-    });
-  }
-  for (std::thread& worker : workers) {
-    if (worker.joinable()) worker.join();
+    {
+      std::lock_guard<std::mutex> guard(workersMutex_);
+      workers_.emplace_back([this, client] {
+        handleConnection(client);
+        ::close(client);
+      });
+    }
   }
 }
 
@@ -238,6 +259,7 @@ void LocalProxy::handleConnection(int client) {
   if (method == "HEAD") return;
 
   for (int64_t at = start; at <= end;) {
+    if (!running_) break;   // 收到停止信号就尽快退出，缩短 stop() 的等待
     const int chunk = static_cast<int>(std::min<int64_t>(kChunkSize, end - at + 1));
     Bytes piece;
     {
