@@ -891,6 +891,11 @@ void VideoView::togglePlay() {
 
 void VideoView::setCustomToggleAction(std::function<void()> action) { this->customToggleAction = action; }
 
+void VideoView::setFullscreenActionHook(std::function<void(brls::Activity*, VideoView*)> hook)
+{
+    this->fullscreenActionHook = std::move(hook);
+}
+
 void VideoView::setSpeed(float speed) { mpvCore->setSpeed(speed); }
 
 void VideoView::setLastPlayedPosition(int64_t p) { lastPlayedPosition = p; }
@@ -1284,6 +1289,12 @@ void VideoView::setFullScreen(bool fs) {
         const auto activity = new brls::Activity(container);
         brls::Application::pushActivity(activity, brls::TransitionAnimation::NONE);
         video->registerCommonActions(activity);
+        // 全屏是**新起的 VideoView**，调用方（红果）注册在当前实例上的自定义按键
+        // 不会自动跟过来 —— 不补挂的话，全屏后「上=换一部」这类操作全部失灵。
+        if (this->fullscreenActionHook) {
+            video->fullscreenActionHook = this->fullscreenActionHook;
+            video->fullscreenActionHook(activity, video);
+        }
 #ifdef ALLOW_FULLSCREEN
         // 应用内全屏时同步切换窗口全屏
         if (WINDOW_FULLSCREEN_ON_APP_FULLSCREEN && !ProgramConfig::instance().getBoolOption(SettingItem::FULLSCREEN)) {

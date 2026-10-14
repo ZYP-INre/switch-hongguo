@@ -166,6 +166,14 @@ public:
     /// 设置自定义的切换播放状态的按钮事件
     void setCustomToggleAction(std::function<void()> action);
 
+    /// 注册「进入全屏时要在新实例上重挂的自定义按键」。
+    ///
+    /// setFullScreen(true) 是**另起一个 VideoView 实例**推入新 activity，
+    /// 而不是复用当前这个。注册在当前 VideoView 或 activity 上的动作
+    /// 因此全屏后会整体失效 —— 这是调用方（红果）踩过的坑。
+    /// 把按键注册逻辑交给这个钩子，全屏实例建好后会立刻回调一次。
+    void setFullscreenActionHook(std::function<void(brls::Activity*, VideoView*)> hook);
+
     /// 番剧自定义菜单信息
     void setBangumiCustomSetting(const std::string& title, uint64_t seasonId);
 
@@ -303,6 +311,7 @@ private:
     MPVEvent::Subscription eventSubscribeID;
     CustomEvent::Subscription customEventSubscribeID;
     std::function<void()> customToggleAction = nullptr;
+    std::function<void(brls::Activity*, VideoView*)> fullscreenActionHook = nullptr;
     brls::ActionListener seasonAction = nullptr;
     brls::InputManager* input;
     NVGcolor bottomBarColor = brls::Application::getTheme().getColor("color/bilibili");

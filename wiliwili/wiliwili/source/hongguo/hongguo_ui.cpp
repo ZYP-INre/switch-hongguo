@@ -703,59 +703,125 @@ void PlayerActivity::startSeries(Series series) {
   });
 }
 
+// 播放按键的唯一来源。小窗与全屏都调这一个函数，保证两处行为一致 ——
+// 之前全屏没反应，就是因为按键只挂在了小窗这一侧。
+void PlayerActivity::installPlayerActions(VideoView* video, brls::Activity* activity) {
+  // 为什么要挂两处：
+  //   VideoView —— 焦点正常都在它身上；而且 View::registerAction 对同一按键是
+  //                **覆盖**语义，只有挂在它上面才顶得掉 wiliwili 自带的绑定
+  //                （R=快进、X=弹幕），否则那两个键在焦点链更靠前的 VideoView
+  //                上就被吃掉，我们的处理器永远轮不到。
+  //   activity  —— 万一焦点落到 frame 上（不在 VideoView 子树里），焦点链里
+  //                就没有 VideoView 的注册，这里兜底。
+  // 提示栏是按**按键**去重的（borealis 的 Hints::refillHints），两边都挂不会重复显示。
+  struct Binding {
+    const char* label;
+    brls::ControllerButton button;
+    brls::ActionListener listener;
+  };
+
+  const std::vector<Binding> bindings = {
+      // 方向键上：随机换下一部。
+      // 这就是抖音那套信息流 —— 不想看了往上一推就换一部，不用退回列表。
+      // 连按由 startSeries 里的 switching 标志挡住（重复的切换会互相拆流）。
+      {"下剧", brls::ControllerButton::BUTTON_UP,
+       [this](brls::View*) {
+         const Series next = Core::instance().randomFromPool(impl_->series.id);
+         if (next.id.empty()) {
+           brls::Application::notify("没有可切换的剧");
+           return true;
+         }
+         brls::Application::notify("下一部：" + next.title);
+         this->startSeries(next);
+         return true;
+       }},
+
+      // X：手动切换旋转角度（自动判断不准时用）。
+      // ⚠ 顶掉了 wiliwili 的「弹幕开关」。短剧没有弹幕，这个交换是划算的。
+      {"旋转", brls::ControllerButton::BUTTON_X,
+       [this](brls::View*) {
+         impl_->rotation = (impl_->rotation + 90) % 360;
+         MPVCore::instance().command_async("set", "video-rotate",
+                                           std::to_string(impl_->rotation));
+         brls::Application::notify("画面旋转 " +
+                                   std::to_string(impl_->rotation) + "°");
+         return true;
+       }},
+
+      // 方向键左右：快退 / 快进 10 秒。
+      // 把快进快退放在这里，是为了把 R 键腾出来给「下一集」——
+      // wiliwili 原本把 R 绑成快进，和我们要的功能冲突。
+      {"快退", brls::ControllerButton::BUTTON_LEFT,
+       [](brls::View*) {
+         MPVCore::instance().seekRelative(-10);
+         return true;
+       }},
+      {"快进", brls::ControllerButton::BUTTON_RIGHT,
+       [](brls::View*) {
+         MPVCore::instance().seekRelative(10);
+         return true;
+       }},
+
+      // R：直接切下一集。比「等这集播完自动切」更常用 ——
+      // 短剧一集就一两分钟，多数人是跳着看的。
+      // ⚠ 顶掉了 wiliwili 的 R=快进（快进已经挪到「→」，不冲突）。
+      {"下集", brls::ControllerButton::BUTTON_RB,
+       [this](brls::View*) {
+         if (impl_->index + 1 < impl_->episodes.size()) {
+           this->playIndex(impl_->index + 1);
+         } else {
+           brls::Application::notify("已经是最后一集");
+         }
+         return true;
+       }},
+  };
+
+  for (const Binding& b : bindings) {
+    if (video) video->registerAction(b.label, b.button, b.listener);
+    if (activity) activity->registerAction(b.label, b.button, b.listener);
+  }
+}
+
 void PlayerActivity::onContentAvailable() {
-  // 方向键上：随机换下一部。
-  // 这就是抖音那套信息流 —— 不想看了往上一推就换一部，不用退回列表。
-  this->registerAction("下剧", brls::ControllerButton::BUTTON_UP,
-                       [this](brls::View*) {
-                         const Series next =
-                             Core::instance().randomFromPool(impl_->series.id);
-                         if (next.id.empty()) {
-                           brls::Application::notify("没有可切换的剧");
-                           return true;
-                         }
-                         brls::Application::notify("下一部：" + next.title);
-                         this->startSeries(next);
-                         return true;
-                       });
+  this->installPlayerActions(this->video, this);
 
-  // X：手动切换旋转角度（自动判断不准时用）。
-  this->registerAction("旋转", brls::ControllerButton::BUTTON_X,
-                       [this](brls::View*) {
-                         impl_->rotation = (impl_->rotation + 90) % 360;
-                         MPVCore::instance().command_async(
-                             "set", "video-rotate", std::to_string(impl_->rotation));
-                         brls::Application::notify(
-                             "画面旋转 " + std::to_string(impl_->rotation) + "°");
-                         return true;
-                       });
+  // 全屏不是复用当前这个 VideoView，而是 pushActivity 一个新实例
+  // （见 view/video_view.cpp 的 setFullScreen），我们拿不到它的指针，
+  // 所以留个钩子让它在建好后回调一次，把同一套按键补挂上去。
+  if (this->video) {
+    this->video->setFullscreenActionHook(
+        [this](brls::Activity* activity, VideoView* fullscreenVideo) {
+          this->installPlayerActions(fullscreenVideo, activity);
+        });
+  }
 
-  // 方向键左右：快退 / 快进 10 秒。
-  // 把快进快退放在这里，是为了把 R 键腾出来给「下一集」——
-  // wiliwili 原本把 L/R 绑成播放列表的上一项/下一项，和我们要的功能冲突。
-  this->registerAction("快退", brls::ControllerButton::BUTTON_LEFT,
-                       [](brls::View*) {
-                         MPVCore::instance().seekRelative(-10);
-                         return true;
-                       });
-  this->registerAction("快进", brls::ControllerButton::BUTTON_RIGHT,
-                       [](brls::View*) {
-                         MPVCore::instance().seekRelative(10);
-                         return true;
-                       });
-
-  // R：直接切下一集。比「等这集播完自动切」更常用 ——
-  // 短剧一集就一两分钟，多数人是跳着看的。
-  this->registerAction("下集", brls::ControllerButton::BUTTON_RB,
-                       [this](brls::View*) {
-                         if (impl_->index + 1 < impl_->episodes.size()) {
-                           this->playIndex(impl_->index + 1);
-                         } else {
-                           brls::Application::notify("已经是最后一集");
-                         }
-                         return true;
-                       });
-
+  // mpv 事件：一集播完自动接下一集；载入完成时按视频实际尺寸定横竖屏。
+  auto alive = impl_->alive;
+  impl_->eventSub = MPV_E->subscribe([this, alive](MpvEventEnum event) {
+    if (!*alive) return;
+    if (event == MpvEventEnum::END_OF_FILE) {
+      this->onEpisodeEnded();
+      return;
+    }
+    if (event == MpvEventEnum::MPV_LOADED) {
+      // 按**视频实际尺寸**决定要不要转，而不是写死。
+      // 短剧基本都是 9:16 竖屏，但真人剧里也混着横屏资源 ——
+      // 一律转 90° 会把横屏的转歪，一律不转则竖屏只用到 1/3 宽度。
+      // getInt 直接读 mpv 属性，此时 demuxer 已打开，宽高是准的。
+      brls::sync([this, alive] {
+        if (!*alive) return;
+        const int64_t w = MPVCore::instance().getInt("width");
+        const int64_t h = MPVCore::instance().getInt("height");
+        if (w <= 0 || h <= 0) return;
+        const int target = (h > w) ? 90 : 0;   // 竖屏转，横屏不转
+        if (target != impl_->rotation) {
+          impl_->rotation = target;
+          MPVCore::instance().command_async("set", "video-rotate",
+                                            std::to_string(target));
+        }
+      });
+    }
+  });
   impl_->subscribed = true;
 
   if (impl_->episodes.empty()) {

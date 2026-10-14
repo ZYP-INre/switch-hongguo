@@ -136,6 +136,10 @@ class PlayerActivity : public brls::Activity {
   void playIndex(size_t index);      // 切到第 index 集
   void onEpisodeEnded();             // 一集播完 → 自动下一集
 
+  // 把播放按键挂到 video 与 activity 上（两者可空，非空才挂）。
+  // 小窗与全屏走的是同一个实现，见 .cpp 里为什么必须两边都挂。
+  void installPlayerActions(VideoView* video, brls::Activity* activity);
+
  private:
   BRLS_BIND(VideoView, video, "hongguo/video");
   BRLS_BIND(brls::Label, status, "hongguo/status");
