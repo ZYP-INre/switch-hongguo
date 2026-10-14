@@ -6,7 +6,9 @@
 #include <borealis/views/cells/cell_detail.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <mutex>
 #include <cstdio>
 #include <random>
 #include <thread>
@@ -142,6 +144,11 @@ struct Core::Impl {
   std::unique_ptr<StreamReader> reader;
   std::unique_ptr<LocalProxy> proxy;
   std::string url;   // 诊断用
+  // ⚠ 换流必须串行。
+  //   连按「换下一部」会同时跑起两个异步取分集，两边回来都调 openStream；
+  //   而 openStream 开头要 closeStream 停掉旧代理 —— 等于把另一个正在用的流
+  //   当场拆掉，表现就是卡死、退不出、崩溃。
+  std::mutex streamMutex;
 
   // 浏览页当前那一批剧，「换一部」从这儿随机挑
   std::vector<Series> pool;
@@ -158,6 +165,7 @@ ContentRepo& Core::repo() { return impl_->repo; }
 Http& Core::http() { return impl_->http; }
 
 std::string Core::openStream(const std::string& episodeId, std::string& quality) {
+  std::lock_guard<std::mutex> guard(impl_->streamMutex);
   closeStream();
   const StreamInfo info = impl_->repo.stream(episodeId);
   quality = info.quality;
@@ -190,6 +198,8 @@ Series Core::randomFromPool(const std::string& excludeId) {
 }
 
 void Core::closeStream() {
+  // 注意：调用方需已持有 streamMutex（openStream 内部已持有）。
+  // 这里不再加锁，否则会与 openStream 重复加锁。
   if (impl_->proxy) {
     impl_->proxy->stop();
     impl_->proxy.reset();
@@ -560,6 +570,8 @@ struct PlayerActivity::Impl {
   std::vector<std::string> episodes;
   size_t index = 0;
   int rotation = 0;                                   // 0 / 90 / 180 / 270
+  // 挡住重复的「换一部」：切流是重活，连按会互相拆台
+  std::atomic<bool> switching{false};
   std::shared_ptr<bool> alive = std::make_shared<bool>(true);
   MPVEvent::Subscription eventSub = MPVEvent::Subscription();
   bool subscribed = false;
@@ -649,6 +661,10 @@ void PlayerActivity::playIndex(size_t index) {
 
 // 载入某部剧并从头播（用于「换一部」）
 void PlayerActivity::startSeries(Series series) {
+  if (impl_->switching.exchange(true)) {
+    brls::Application::notify("正在切换，请稍候");
+    return;
+  }
   impl_->series = series;
   impl_->episodes.clear();
   impl_->index = 0;
@@ -670,6 +686,7 @@ void PlayerActivity::startSeries(Series series) {
 
     brls::sync([this, alive, episodes, error, seriesTitle] {
       if (!*alive) return;
+      impl_->switching = false;
       if (!error.empty()) {
         if (video) video->hideLoading();
         if (status) status->setText("取分集失败：" + error);
