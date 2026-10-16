@@ -19,6 +19,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# ⚠ 必须显式声明。仓库的默认工作流权限是 read（settings → Actions →
+#   General → Workflow permissions），不写这块的话 GITHUB_TOKEN 是只读的，
+#   "附加到 Release" 会以 403 "Resource not accessible by integration" 失败 ——
+#   而且是在 .nro 已经构建成功、只是最后一步挂不上去的时候才炸，很误导。
+permissions:
+  contents: write
+
 jobs:
   build-nro:
     runs-on: ubuntu-latest
