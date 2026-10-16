@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "hongguo/hongguo_ui.hpp"
 
+#include "hongguo/dash_reader.hpp"
+
 #include <borealis.hpp>
 #include <borealis/core/touch/tap_gesture.hpp>
 #include <borealis/views/cells/cell_detail.hpp>
@@ -142,6 +144,12 @@ struct Core::Impl {
   }
 
   std::unique_ptr<StreamReader> reader;
+  // 新播放通道（2026-10-15 起）：两条 DASH 轨 + 把它们合成一条 fMP4 的合成器。
+  // ⚠ 声明顺序即销毁顺序的**逆序**：proxy 在最后声明，所以最先销毁 ——
+  //   它的工作线程 join 完才轮到 reader/muxer，不会出现线程还在读、对象已经没了。
+  std::unique_ptr<DashTrackReader> videoTrack;
+  std::unique_ptr<DashTrackReader> audioTrack;
+  std::unique_ptr<DashMuxer> muxer;
   std::unique_ptr<LocalProxy> proxy;
   std::string url;   // 诊断用
   // ⚠ 换流必须串行。
@@ -164,11 +172,28 @@ Core& Core::instance() {
 ContentRepo& Core::repo() { return impl_->repo; }
 Http& Core::http() { return impl_->http; }
 
-std::string Core::openStream(const std::string& episodeId, std::string& quality) {
+std::string Core::openStream(const std::string& seriesId, const std::string& episodeId,
+                             std::string& quality) {
   std::lock_guard<std::mutex> guard(impl_->streamMutex);
   closeStream();
-  const StreamInfo info = impl_->repo.stream(episodeId);
+  const StreamInfo info = impl_->repo.stream(seriesId, episodeId);
   quality = info.quality;
+  impl_->proxy = std::make_unique<LocalProxy>();
+
+  // 新通道：视频与音频是两条独立的 DASH 轨，各自 CENC 加密。
+  // 目标机的 ffmpeg 没有 dash 解复用器，所以在这里把它们合成一条普通 fMP4，
+  // 播放器那边（mpv）看到的就是一个再普通不过的本地 HTTP 流。
+  if (info.dash) {
+    impl_->videoTrack = std::make_unique<DashTrackReader>(impl_->http, info.video, info.key);
+    if (!info.audio.url.empty()) {
+      impl_->audioTrack = std::make_unique<DashTrackReader>(impl_->http, info.audio, info.key);
+    }
+    impl_->muxer = std::make_unique<DashMuxer>(*impl_->videoTrack, impl_->audioTrack.get());
+    impl_->muxer->prepare();
+    impl_->url = impl_->proxy->startMux(*impl_->muxer);
+    return impl_->url;
+  }
+
   impl_->reader = std::make_unique<StreamReader>(impl_->http, info);
   // 只做 prepare()（拉 256KB 头部、解析 moov 建样本索引），**不做 warm()**。
   //
@@ -179,7 +204,6 @@ std::string Core::openStream(const std::string& episodeId, std::string& quality)
   //
   // 连接复用已经生效，后续按需拉取不必每次重新握手，起播后的流畅度有保障。
   impl_->reader->prepare();
-  impl_->proxy = std::make_unique<LocalProxy>();
   impl_->url = impl_->proxy->start(*impl_->reader);
   return impl_->url;
 }
@@ -205,6 +229,9 @@ void Core::closeStream() {
     impl_->proxy.reset();
   }
   impl_->reader.reset();
+  impl_->muxer.reset();
+  impl_->audioTrack.reset();
+  impl_->videoTrack.reset();
 }
 
 // ================================================================== 浏览页
@@ -614,6 +641,7 @@ void PlayerActivity::playIndex(size_t index) {
   impl_->index = index;
 
   const std::string episodeId = impl_->episodes[index];
+  const std::string seriesId = impl_->series.id;
   const std::string seriesTitle = impl_->series.title;
   const size_t shown = index + 1;
 
@@ -623,12 +651,12 @@ void PlayerActivity::playIndex(size_t index) {
   if (video) video->showLoading();
 
   auto alive = impl_->alive;
-  brls::async([this, alive, episodeId, seriesTitle, shown] {
+  brls::async([this, alive, seriesId, episodeId, seriesTitle, shown] {
     std::string error;
     std::string quality;
     std::string url;
     try {
-      url = Core::instance().openStream(episodeId, quality);
+      url = Core::instance().openStream(seriesId, episodeId, quality);
     } catch (const std::exception& e) {
       error = e.what();
     }

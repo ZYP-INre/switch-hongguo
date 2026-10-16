@@ -30,11 +30,12 @@
 hgctl home          → 24 部剧，标题/集数/标签/封面全对
 hgctl search 总裁    → 服务端接受了我们生成的签名
 hgctl detail <ID>   → 69 集分集列表正确
-hgctl play <ID>     → 1080P，地址已解密，内容密钥已派生
-hgctl fetch <ID>    → 解密产出合法 MP4
+hgctl play <剧集ID> <分集ID>   → 720p DASH 分轨 + 内容密钥已派生
+hgctl dashdump ... video     → 解密产出合法 H.264 fMP4（ffprobe/ffmpeg 验收）
+hgctl dashserve ...          → 两轨合成一条 fMP4，经本地代理解码整集无错
 ffprobe             → HEVC 1080×1920 + AAC（竖屏，正是短剧形态）
 ffmpeg              → 无错解出视频帧
-hgctl stream <ID>   → 本地代理 Range 自测四项全过，输出与直连逐字节一致
+hgctl stream <剧集ID> <分集ID> → 本地代理 Range 自测四项全过
 ```
 
 ### 验证方法

@@ -141,6 +141,81 @@ node tools/oracle/check-signing.mjs                              # 自检对拍�
 
 ---
 
+## 播放通道：2026-10-15 的换代
+
+这一节描述**当前**的播放链路。旧文档里那套 `fqnovel` 域名下的 `video_model`
+单集接口已经不可用，别再照它去调。
+
+### 旧通道是怎么死的
+
+2026-10-15 起，`api5-normal-sinfonlineb.fqnovel.com` 下的 `video_model` 与
+`multi_video_model` 对所有请求一律返回**空 200**（批量接口返回 `110001`）。
+关键判据：**故意把 `x-gorgon` / `x-medusa` / `x-ss-req-ticket` 改成坏值，
+返回与合法签名完全一致** —— 说明服务端在验签之前就短路了。
+
+也就是说这不是"请求姿势不对"，换签名、换设备指纹、换域名、换 HTTP 方法
+都没用。读接口（首页 / 搜索 / 详情）仍然正常，封的是播放。
+
+### 新通道：网站自己的 play-info
+
+网页版走的是另一条路，不需要 App 签名：
+
+```
+POST https://hongguoduanju.com/api/video/protected/play-info
+     Origin/Referer 指向 hongguoduanju.com
+     {"series_id":"<剧集ID>","item_id":"<分集ID>","definition":"720p"}
+→ { "play_info": { main_url, backup_url, player_access_key, kid,
+                   init_range, index_range, first_moof_range, size, duration, ...,
+                   "audio": { 同结构 } } }
+```
+
+几个必须照做的点（都实测过）：
+
+- **剧集 ID 与分集 ID 必须配套**，只给分集 ID 直接 `403 protected_playback_unavailable`。
+  所以 `ContentRepo::stream()` 的签名是 `(seriesId, episodeId, maxQuality)`。
+- 档位只认 `480p` / `720p`，给 `1080p` 返回 `400`。不传 `definition` 默认 720p。
+- 媒体是 **DASH 分轨**（视频、音频各一条），各自 **CENC 加密**。
+  返回的 `init_range` / `index_range` / `first_moof_range` 都是**闭区间**的绝对偏移。
+- 该接口**按 IP 限流**，密集调试会被 403 一段时间。`HG_PLAY_INFO_FILE`
+  可以喂一份保存好的响应，避免反复打上游。
+
+### 密钥：`deriveAccessKey`
+
+新通道的 `player_access_key` 与旧的 `spade_a` 不是同一个值，但**同族**：
+都是"长度由头三字节异或决定 + 两个交替种子逐字节混淆"。
+
+```
+buf[i] = (buf[i] ^ (i奇数 ? a : b)) + popcount(i) + 21     // a=85, b=250
+key    = hex(buf[1..33])
+```
+
+与旧 `deriveKey` 的两处差异（照站点内嵌的 `aw.wasm` 逐字节对拍确认）：
+
+1. 种子 `b` 是 **250**（旧版 246）
+2. 末步是 `+popcount(i) + 21`（旧版是 `-21 - popcount(i)`）
+
+这一步的算法是从混淆过的 WASM（`aw.wasm`，控制流平坦化）里逆出来的。
+如果哪天 `work[1..33]` 出来的不是 32 个合法十六进制字符，说明上游又改版了 ——
+`deriveAccessKey` 会直接抛错，不会静默返回半个密钥。
+
+### 为什么要自己把两条轨合成一条 fMP4
+
+`DashMuxer` 把视频轨与音频轨拼成一条普通 fMP4，播放器看到的就是一个寻常的本地流。
+
+**不是因为喜欢造轮子**：目标机的 ffmpeg（devkitPro 的 `libavformat`）**没有编译
+dash 解复用器** —— `nm` 里只有 `ff_mov_demuxer` / `ff_mpegts_demuxer`，
+没有 `ff_dash_demuxer`。MPD 那条路在 Switch 上根本走不通。而 mov 解复用器是有的。
+
+拼法只做三件事：搬 box、改音频轨的 `track_ID`（两条轨各自生成时都是 1，合到一个
+moov 里会撞车）、把音频分片 `tfhd` 里的 `track_ID` 一起改掉。**不重编码、不重排时间**。
+
+`DashTrackReader` 的输出与源轨**偏移完全一致**（CENC 是就地等长的），
+所以合成器只需要维护一张"输出偏移 → 源轨 + 偏移"的分片表。
+
+已验证：整集（111 秒）经本地代理解码无错，逐帧可播，seek 正常。
+
+---
+
 ## 上游行为备忘
 
 移植过程中确认的、不明显但必须照做的行为。改代码前请先读这节。

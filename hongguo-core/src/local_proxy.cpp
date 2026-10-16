@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <mutex>
 #include <vector>
 #include <cstdio>
@@ -30,16 +31,24 @@ namespace {
 // 之后每块只需拉 128KB，远低于超时阈值。连接已复用，多几次请求的代价可以接受。
 constexpr size_t kChunkSize = 128 * 1024;
 
-void writeAll(int fd, const char* data, size_t size) {
+// 返回 false 表示对端已经断开。
+//
+// ⚠ 这个返回值必须被用起来。播放器读够了就关连接，而我们这边还在按 128KB
+//   一段段去 CDN 拉数据 —— 不因为写失败而停下的话，每条被抛弃的连接都会
+//   继续跑完整段（十几 MB），线程与文件描述符只增不减，
+//   最后 accept 拿到 EMFILE，内核把新连接直接 RST，表现就是
+//   "端口还在监听却 Connection refused"。
+bool writeAll(int fd, const char* data, size_t size) {
   size_t sent = 0;
   while (sent < size) {
     const ssize_t written = ::send(fd, data + sent, size - sent, 0);
-    if (written <= 0) return;  // 对端断开，正常结束
+    if (written <= 0) return false;
     sent += static_cast<size_t>(written);
   }
+  return true;
 }
 
-void writeAll(int fd, const std::string& text) { writeAll(fd, text.data(), text.size()); }
+bool writeAll(int fd, const std::string& text) { return writeAll(fd, text.data(), text.size()); }
 
 // 读到请求头结束（\r\n\r\n）为止。
 std::string readRequest(int fd) {
@@ -102,6 +111,13 @@ std::string LocalProxy::start(StreamReader& reader) {
   }
   reader_ = &reader;
 
+  bindListener();
+  running_ = true;
+  worker_ = std::thread([this] { acceptLoop(); });
+  return "http://127.0.0.1:" + std::to_string(port_) + "/stream";
+}
+
+uint16_t LocalProxy::bindListener() {
   // 对端提前断开时不要用 SIGPIPE 打死整个进程
   ::signal(SIGPIPE, SIG_IGN);
 
@@ -121,7 +137,10 @@ std::string LocalProxy::start(StreamReader& reader) {
     listenFd_ = -1;
     throw std::runtime_error("无法绑定回环端口");
   }
-  if (::listen(listenFd_, 4) < 0) {
+  // ⚠ backlog 不能小。每条连接都带 Connection: close，播放器一次会打开好几条
+  //   （视频、音频、seek 各一条），队列一满内核对新连接就直接回 RST ——
+  //   表现是"本地端口明明还在监听，却 Connection refused"。
+  if (::listen(listenFd_, 128) < 0) {
     ::close(listenFd_);
     listenFd_ = -1;
     throw std::runtime_error("监听失败");
@@ -133,6 +152,13 @@ std::string LocalProxy::start(StreamReader& reader) {
     port_ = ntohs(bound.sin_port);
   }
 
+  return port_;
+}
+
+std::string LocalProxy::startMux(DashMuxer& muxer) {
+  if (running_) return "http://127.0.0.1:" + std::to_string(port_) + "/stream";
+  muxer_ = &muxer;
+  bindListener();
   running_ = true;
   worker_ = std::thread([this] { acceptLoop(); });
   return "http://127.0.0.1:" + std::to_string(port_) + "/stream";
@@ -166,8 +192,14 @@ void LocalProxy::acceptLoop() {
   while (running_) {
     const int client = ::accept(listenFd_, nullptr, nullptr);
     if (client < 0) {
+      if (std::getenv("HG_PROXY_DEBUG")) {
+        std::fprintf(stderr, "[proxy] accept 失败: %s\n", std::strerror(errno));
+      }
       if (!running_) break;
       continue;
+    }
+    if (std::getenv("HG_PROXY_DEBUG")) {
+      std::fprintf(stderr, "[proxy] 接受连接 fd=%d\n", client);
     }
 #ifdef SO_NOSIGPIPE
     int on = 1;
@@ -187,7 +219,16 @@ void LocalProxy::acceptLoop() {
     {
       std::lock_guard<std::mutex> guard(workersMutex_);
       workers_.emplace_back([this, client] {
-        handleConnection(client);
+        // ⚠ 必须兜住异常。分片拉取失败、容器解析异常都会从这里冒出来，
+        //   而线程里漏出去的异常是 std::terminate —— 整个进程当场消失，
+        //   表现就是"播几秒后连本地端口都连不上了"，极难定位。
+        try {
+          handleConnection(client);
+        } catch (const std::exception& error) {
+          std::fprintf(stderr, "[proxy] 连接处理失败：%s\n", error.what());
+        } catch (...) {
+          std::fprintf(stderr, "[proxy] 连接处理失败：未知异常\n");
+        }
         ::close(client);
       });
     }
@@ -200,12 +241,22 @@ void LocalProxy::handleConnection(int client) {
   if (request.empty()) return;
 
   const size_t lineEnd = request.find("\r\n");
-  const std::string requestLine = request.substr(0, lineEnd == std::string::npos ? request.size() : lineEnd);
+  const std::string requestLine =
+      request.substr(0, lineEnd == std::string::npos ? request.size() : lineEnd);
 
   std::string method = "GET";
+  std::string target = "/stream";
   {
     const size_t space = requestLine.find(' ');
-    if (space != std::string::npos) method = requestLine.substr(0, space);
+    if (space != std::string::npos) {
+      method = requestLine.substr(0, space);
+      const size_t stop = requestLine.find(' ', space + 1);
+      const size_t end = stop == std::string::npos ? requestLine.size() : stop;
+      if (end > space + 1) target = requestLine.substr(space + 1, end - space - 1);
+    }
+  }
+  if (const size_t query = target.find('?'); query != std::string::npos) {
+    target = target.substr(0, query);
   }
 
   // 取 Range 头
@@ -226,7 +277,39 @@ void LocalProxy::handleConnection(int client) {
       }
     }
   }
+  const bool head = method == "HEAD";
+  if (std::getenv("HG_PROXY_DEBUG")) {
+    std::fprintf(stderr, "[proxy] %s %s range=[%s]\n", method.c_str(), target.c_str(),
+                 rangeValue.c_str());
+  }
 
+  // ---- 合成流模式（新通道）：两条 DASH 轨拼成的一条普通 fMP4 ----
+  if (muxer_ != nullptr) {
+    const int64_t total = muxer_->total();
+    if (total <= 0) {
+      writeAll(client, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    int64_t start = 0;
+    int64_t end = total - 1;
+    if (!rangeValue.empty() && !parseRange(rangeValue, total, start, end)) {
+      const std::string body = "range not satisfiable";
+      writeAll(client, "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */" +
+                           std::to_string(total) + "\r\nContent-Length: " +
+                           std::to_string(body.size()) + "\r\n\r\n" + body);
+      return;
+    }
+    serveRange(client, head, total, "video/mp4", readerMutex_,
+               [this](int64_t at, int count) { return muxer_->read(at, count); }, start, end,
+               !rangeValue.empty());
+    return;
+  }
+
+  // ---- 单流模式（旧通道）----
+  if (reader_ == nullptr) {
+    writeAll(client, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+    return;
+  }
   const int64_t total = reader_->total();
   if (total <= 0) {
     writeAll(client, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
@@ -243,34 +326,51 @@ void LocalProxy::handleConnection(int client) {
                          std::to_string(body.size()) + "\r\n\r\n" + body);
     return;
   }
+  serveRange(client, head, total, "video/mp4", readerMutex_,
+             [this](int64_t at, int count) { return reader_->read(at, count); }, start, end,
+             ranged);
+}
 
+void LocalProxy::serveRange(int client, bool head, int64_t total, const std::string& contentType,
+                            std::mutex& mutex,
+                            const std::function<Bytes(int64_t, int)>& read, int64_t start,
+                            int64_t end, bool ranged) {
   const int64_t length = end - start + 1;
   std::string header = ranged ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n";
-  header += "Content-Type: video/mp4\r\n";
+  header += "Content-Type: " + contentType + "\r\n";
   header += "Accept-Ranges: bytes\r\n";
   header += "Content-Length: " + std::to_string(length) + "\r\n";
   if (ranged) {
-    header += "Content-Range: bytes " + std::to_string(start) + "-" +
-              std::to_string(end) + "/" + std::to_string(total) + "\r\n";
+    header += "Content-Range: bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" +
+              std::to_string(total) + "\r\n";
   }
   header += "Connection: close\r\n\r\n";
   writeAll(client, header);
-
-  if (method == "HEAD") return;
+  if (head) return;
 
   for (int64_t at = start; at <= end;) {
-    if (!running_) break;   // 收到停止信号就尽快退出，缩短 stop() 的等待
+    if (!running_) break;  // 收到停止信号就尽快退出，缩短 stop() 的等待
     const int chunk = static_cast<int>(std::min<int64_t>(kChunkSize, end - at + 1));
     Bytes piece;
     {
-      // StreamReader 内部有前缀缓存与共享连接，多线程同时读会互相踩。
-      // 连接之间并发，读动作本身串行。
-      std::lock_guard<std::mutex> guard(readerMutex_);
-      piece = reader_->read(at, chunk);
+      // 读动作串行：StreamReader 有前缀缓存与共享连接，多线程同时读会互相踩。
+      // DASH 的两条轨各用各的锁，视频与音频可以真正并行。
+      std::lock_guard<std::mutex> guard(mutex);
+      piece = read(at, chunk);
     }
-    if (piece.empty()) break;
+    if (piece.empty()) {
+      if (std::getenv("HG_PROXY_DEBUG")) {
+        std::fprintf(stderr, "[proxy] 读到空块，提前结束 at=%lld\n", (long long)at);
+      }
+      break;
+    }
     servedBytes_.fetch_add(piece.size());
-    writeAll(client, reinterpret_cast<const char*>(piece.data()), piece.size());
+    if (!writeAll(client, reinterpret_cast<const char*>(piece.data()), piece.size())) {
+      if (std::getenv("HG_PROXY_DEBUG")) {
+        std::fprintf(stderr, "[proxy] 对端断开 at=%lld\n", (long long)at);
+      }
+      break;
+    }
     at += static_cast<int64_t>(piece.size());
   }
 }

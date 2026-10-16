@@ -35,7 +35,11 @@ class ContentRepo {
   CatalogPage search(const std::string& keyword, int page = 1,
                      ContentType type = ContentType::Short);
   Detail detail(const std::string& seriesId);
-  StreamInfo stream(const std::string& episodeId, int maxQuality = 1080);
+
+  // ⚠ 新播放通道（2026-10-15 起）**同时需要剧集 ID 与分集 ID**：
+  //   play-info 会校验两者是否属于同一部剧，只给分集 ID 直接 403。
+  StreamInfo stream(const std::string& seriesId, const std::string& episodeId,
+                    int maxQuality = 1080);
 
   // 把清晰度描述换算成数值（如 "1080P" → 1080、"1920x1080" → 1080）。
   static int qualityNumber(const std::string& value);

@@ -205,3 +205,23 @@ HG_TEST(media_without_key_returns_data_untouched) {
   HG_CHECK(prepared.samples.empty());
   HG_CHECK_EQ(decrypt(data, 0, std::nullopt, prepared), data);
 }
+
+HG_TEST(media_derive_access_key_matches_upstream_wasm) {
+  // 2026-10-15 起上游换用了新播放通道，player_access_key 与旧 spade_a 不同族内
+  // 同源。这两个向量取自真实 play-info 响应，并经站点内嵌的 aw.wasm 逐字节对拍过。
+  HG_CHECK_EQ(deriveAccessKey("z+Yb/ASySvhVqE63UKsd5laqGLMErU6NWa9BjwySFIsCkBi6ug=="),
+              fromHex("d06dea7f2663eedbe045b80908f51201"));
+  HG_CHECK_EQ(deriveAccessKey("zeYZxQfeTZMDsRqrBLRN/gWxTvoD4E/8V7NNk1bfG8gF0h///w=="),
+              fromHex("b951adf80166abaebbe1d41f284df080"));
+}
+
+HG_TEST(media_derive_access_key_fails_closed_on_garbage) {
+  // 长度不足或 work[1..33] 不是合法十六进制时必须报错，绝不能静默返回半个密钥。
+  bool threw = false;
+  try {
+    deriveAccessKey("AAAA");
+  } catch (const std::exception&) {
+    threw = true;
+  }
+  HG_CHECK(threw);
+}

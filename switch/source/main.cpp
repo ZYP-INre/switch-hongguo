@@ -17,7 +17,10 @@
 #include <cstdio>
 #include <string>
 
+#include <memory>
+
 #include "hongguo/content_repo.hpp"
+#include "hongguo/dash_reader.hpp"
 #include "hongguo/digest.hpp"
 #include "hongguo/http.hpp"
 #include "hongguo/local_proxy.hpp"
@@ -133,14 +136,26 @@ void runProbe(Report& report) {
   }
   printf("    使用固定分集 id=%s（与桌面端一致）\n", episodeId.c_str());
 
-  // ---- 3. 播放解析（签名 + 两层解密）----
-  printf("[3] STREAM RESOLVE  (signed POST + 2-layer decrypt)\n");
+  // ---- 3. 播放解析（新通道：play-info + DASH）----
+  printf("[3] STREAM RESOLVE  (play-info + DASH)\n");
   StreamInfo info;
   try {
-    info = repo.stream(episodeId);
-    printf("    OK  quality=%s  encrypted=%s\n", info.quality.c_str(),
-           info.key ? "yes" : "no");
-    printf("    url_len=%zu\n", info.url.size());
+    info = repo.stream(home.items[0].id, episodeId);
+    printf("    OK  quality=%s  encrypted=%s  channel=%s\n", info.quality.c_str(),
+           info.key ? "yes" : "no", info.dash ? "DASH" : "progressive");
+    if (info.dash) {
+      printf("    video=%lld bytes  audio=%lld bytes\n",
+             static_cast<long long>(info.video.total),
+             static_cast<long long>(info.audio.total));
+    } else {
+      printf("    url_len=%zu\n", info.url.size());
+    }
+    printf("    ACCESS_KEY len=%zu first32=%.32s\n", info.rawKey.size(), info.rawKey.c_str());
+    if (info.key) {
+      printf("    KEY len=%zu hex=%s\n", info.key->size(), toHex(*info.key).c_str());
+    } else {
+      printf("    KEY 无（资源未加密）\n");
+    }
     report.stream = true;
   } catch (const std::exception& e) {
     printError("    FAIL  ", e.what());
@@ -148,46 +163,61 @@ void runProbe(Report& report) {
     return;
   }
 
-  // ---- 4. 拉取并解密 ----
-  printf("[4] DECRYPT  (range fetch + CENC)\n");
+  // ---- 4. 解密（DASH 分片 + CENC，必要时合成两轨）----
+  printf("[4] DECRYPT  (DASH fragments + CENC)\n");
+  std::unique_ptr<StreamReader> progressive;
+  std::unique_ptr<DashTrackReader> videoTrack;
+  std::unique_ptr<DashTrackReader> audioTrack;
+  std::unique_ptr<DashMuxer> muxer;
   try {
-    StreamReader reader(http, info);
-    reader.prepare();
-    printf("    total=%lld bytes\n", static_cast<long long>(reader.total()));
-
-    const Bytes head = reader.read(0, 4096);
-    const std::string fourcc = asciiAt(head, 4, 4);
-    printf("    container fourcc='%s'  %s\n", fourcc.c_str(),
-           fourcc == "ftyp" ? "OK" : "BAD");
-    if (fourcc != "ftyp") {
-      report.fail("decrypt", "bad container header");
-      return;
-    }
-
-    // ⚠ 头部 4 字节是**未加密**区域，验它说明不了解密对不对。
-    //   这里读一段**加密的视频数据**并打印指纹，与桌面端对拍 ——
-    //   解密若在 ARM 上有偏差，mpv 拿到的就是乱码，表现为 0/0 不播。
-    // 逐段打印中间值，用来判断是「密钥派生」「样本索引」还是「CTR 解密」出了偏差
-    printf("    EP=%s\n", info.episodeId.c_str());
-    printf("    QUALITY=%s\n", info.quality.c_str());
-    printf("    SPADE_A len=%zu first32=%.32s\n", info.rawKey.size(), info.rawKey.c_str());
-    printf("    SPADE_A len=%zu first32=%.32s\n", info.rawKey.size(), info.rawKey.c_str());
-    if (info.key) {
-      printf("    KEY len=%zu hex=%s\n", info.key->size(), toHex(*info.key).c_str());
-    } else {
-      printf("    KEY 无（资源未加密）\n");
-    }
-    {
-      printf("%s", reader.debugSampleDump(3).c_str());
-    }
-    {
-      const int64_t off = 2 * 1024 * 1024;   // 2MB 处，远在 moov 之后，必为加密样本
-      if (reader.total() > off + 1024 * 1024) {
-        const Bytes mid = reader.read(off, 1024 * 1024);
+    if (info.dash) {
+      videoTrack = std::make_unique<DashTrackReader>(http, info.video, info.key);
+      if (!info.audio.url.empty()) {
+        audioTrack = std::make_unique<DashTrackReader>(http, info.audio, info.key);
+      }
+      muxer = std::make_unique<DashMuxer>(*videoTrack, audioTrack.get());
+      muxer->prepare();
+      printf("    muxed total=%lld header=%lld pieces=%zu\n",
+             static_cast<long long>(muxer->total()),
+             static_cast<long long>(muxer->headerSize()), muxer->pieceCount());
+      const Bytes head = muxer->read(0, 4096);
+      const std::string fourcc = asciiAt(head, 4, 4);
+      printf("    container fourcc='%s'  %s\n", fourcc.c_str(),
+             fourcc == "ftyp" ? "OK" : "BAD");
+      if (fourcc != "ftyp") {
+        report.fail("decrypt", "bad container header");
+        return;
+      }
+      // ⚠ 头部是明文，验它说明不了解密对不对。这里读一段**加密的视频数据**
+      //   并打印指纹，与桌面端对拍 —— 解密若在 ARM 上有偏差，mpv 拿到的就是乱码。
+      const int64_t off = 2 * 1024 * 1024;
+      if (muxer->total() > off + 1024 * 1024) {
+        const Bytes mid = muxer->read(off, 1024 * 1024);
         printf("    DATA@2MB len=%zu md5=%s\n", mid.size(), md5Hex(mid).c_str());
-        printf("    DATA@2MB head16=%s\n", toHex(Bytes(mid.begin(), mid.begin()+16)).c_str());
+        printf("    DATA@2MB head16=%s\n",
+               toHex(Bytes(mid.begin(), mid.begin() + 16)).c_str());
       } else {
         printf("    (资源过小，跳过加密区取样)\n");
+      }
+    } else {
+      progressive = std::make_unique<StreamReader>(http, info);
+      progressive->prepare();
+      printf("    total=%lld bytes\n", static_cast<long long>(progressive->total()));
+      const Bytes head = progressive->read(0, 4096);
+      const std::string fourcc = asciiAt(head, 4, 4);
+      printf("    container fourcc='%s'  %s\n", fourcc.c_str(),
+             fourcc == "ftyp" ? "OK" : "BAD");
+      if (fourcc != "ftyp") {
+        report.fail("decrypt", "bad container header");
+        return;
+      }
+      printf("%s", progressive->debugSampleDump(3).c_str());
+      const int64_t off = 2 * 1024 * 1024;
+      if (progressive->total() > off + 1024 * 1024) {
+        const Bytes mid = progressive->read(off, 1024 * 1024);
+        printf("    DATA@2MB len=%zu md5=%s\n", mid.size(), md5Hex(mid).c_str());
+        printf("    DATA@2MB head16=%s\n",
+               toHex(Bytes(mid.begin(), mid.begin() + 16)).c_str());
       }
     }
     report.decrypt = true;
@@ -195,7 +225,12 @@ void runProbe(Report& report) {
     // ---- 5. 本地代理 ----
     printf("[5] LOCAL PROXY\n");
     LocalProxy proxy;
-    const std::string url = proxy.start(reader);
+    std::string url;
+    if (muxer) {
+      url = proxy.startMux(*muxer);
+    } else {
+      url = proxy.start(*progressive);
+    }
     printf("    listening: %s\n", url.c_str());
     printf("%s", proxy.selfTest().c_str());
     report.proxy = true;

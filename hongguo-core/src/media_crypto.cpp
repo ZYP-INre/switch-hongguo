@@ -97,6 +97,41 @@ void writeFourcc(Bytes& header, int64_t at, const Bytes& fourcc) {
   for (int i = 0; i < 4; ++i) header[static_cast<size_t>(at + i)] = fourcc[static_cast<size_t>(i)];
 }
 
+// 还原原始编码格式：从 frma 取回 codec，把 encv/enca 改回去，并抹掉 sinf。
+// 就地改写，长度不变 —— 偏移必须保持稳定，否则样本索引与 Range 请求全部错位。
+void restoreCodec(Bytes& header, const Bytes& data, const Box& stbl) {
+  // 还原原始编码格式：从 frma 取回 codec，把 encv/enca 改回去，并抹掉 sinf
+  int64_t at = stbl.body;
+  while (at + 8 <= stbl.end) {
+    Box sinf;
+    if (!findBox(data, "sinf", at, stbl.end, sinf)) break;
+    Box frma;
+    if (!findBox(data, "frma", sinf.body, sinf.end, frma)) {
+      throw std::runtime_error("原始编码格式缺失");
+    }
+    if (frma.body + 4 > frma.end) throw std::runtime_error("原始编码格式无效");
+    Bytes original(data.begin() + frma.body, data.begin() + frma.body + 4);
+    // ⚠ 字节的私有编码要映射成 FFmpeg 认的通用 fourcc：
+    //   bvc1 = ByteVC1，本质是 HEVC，只是套了私有标签。
+    //   不改的话容器里写着 bvc1，FFmpeg/mpv 报 "unknown codec"，
+    //   表现就是有画面框、时长也对，但永远 0/0 不播。
+    //   （实测：ffprobe 直连我们的代理，改前 codec_name=unknown，改后 =hevc）
+    const std::string tag(original.begin(), original.end());
+    if (tag == "bvc1") original = Bytes{'h', 'v', 'c', '1'};
+    for (int64_t entryAt = sinf.start - 1; entryAt >= stbl.body; --entryAt) {
+      const std::string type = asciiAt(data, static_cast<size_t>(entryAt), 4);
+      if (type == "encv" || type == "enca") {
+        writeFourcc(header, entryAt, original);
+        break;
+      }
+    }
+    writeFourcc(header, sinf.start + 4, Bytes{'f', 'r', 'e', 'e'});
+    std::fill(header.begin() + static_cast<int64_t>(sinf.body),
+              header.begin() + static_cast<int64_t>(sinf.end), 0x00);
+    at = sinf.end;
+  }
+}
+
 }  // namespace
 
 // ------------------------------------------------------------ 内容密钥派生
@@ -123,6 +158,34 @@ Bytes deriveKey(const std::string& value) {
     }
     const int popcount = __builtin_popcount(static_cast<unsigned>(i));
     work[i] = static_cast<uint8_t>((-21 - popcount + static_cast<int>(previous ^ old)) & 0xff);
+  }
+
+  const std::string hexText(work.begin() + 1, work.begin() + 33);
+  return fromHex(hexText);
+}
+
+Bytes deriveAccessKey(const std::string& value) {
+  const Bytes raw = fromBase64(value);
+  if (raw.size() < 3) throw std::runtime_error("访问密钥格式异常");
+
+  // 与旧版同一套长度推导：头三字节的异或决定要吃掉多少尾部字节。
+  const int64_t span = static_cast<int64_t>(raw.size()) - (raw[0] ^ raw[1] ^ raw[2]) + 47;
+  const int64_t length = std::min<int64_t>(span, static_cast<int64_t>(raw.size()) - 1);
+  if (length < 34) throw std::runtime_error("访问密钥长度异常");
+
+  Bytes work(raw.begin() + 1, raw.begin() + 1 + length);
+  uint32_t a = 85;
+  uint32_t b = 250;  // ⚠ 旧版是 246
+  for (size_t i = 0; i < work.size(); ++i) {
+    const uint32_t old = work[i];
+    const uint32_t previous = (i & 1) != 0 ? a : b;
+    if ((i & 1) != 0) {
+      a = old;
+    } else {
+      b = old;
+    }
+    const int popcount = __builtin_popcount(static_cast<unsigned>(i));
+    work[i] = static_cast<uint8_t>((old ^ previous) + static_cast<uint32_t>(popcount) + 21);
   }
 
   const std::string hexText(work.begin() + 1, work.begin() + 33);
@@ -352,36 +415,7 @@ Prepared prepare(const Bytes& data, const std::optional<Bytes>& key) {
     }
     if (sampleIndex != sampleCount) throw std::runtime_error("视频样本不完整");
 
-    // 还原原始编码格式：从 frma 取回 codec，把 encv/enca 改回去，并抹掉 sinf
-    int64_t at = stbl.body;
-    while (at + 8 <= stbl.end) {
-      Box sinf;
-      if (!findBox(data, "sinf", at, stbl.end, sinf)) break;
-      Box frma;
-      if (!findBox(data, "frma", sinf.body, sinf.end, frma)) {
-        throw std::runtime_error("原始编码格式缺失");
-      }
-      if (frma.body + 4 > frma.end) throw std::runtime_error("原始编码格式无效");
-      Bytes original(data.begin() + frma.body, data.begin() + frma.body + 4);
-      // ⚠ 字节的私有编码要映射成 FFmpeg 认的通用 fourcc：
-      //   bvc1 = ByteVC1，本质是 HEVC，只是套了私有标签。
-      //   不改的话容器里写着 bvc1，FFmpeg/mpv 报 "unknown codec"，
-      //   表现就是有画面框、时长也对，但永远 0/0 不播。
-      //   （实测：ffprobe 直连我们的代理，改前 codec_name=unknown，改后 =hevc）
-      const std::string tag(original.begin(), original.end());
-      if (tag == "bvc1") original = Bytes{'h', 'v', 'c', '1'};
-      for (int64_t entryAt = sinf.start - 1; entryAt >= stbl.body; --entryAt) {
-        const std::string type = asciiAt(data, static_cast<size_t>(entryAt), 4);
-        if (type == "encv" || type == "enca") {
-          writeFourcc(header, entryAt, original);
-          break;
-        }
-      }
-      writeFourcc(header, sinf.start + 4, Bytes{'f', 'r', 'e', 'e'});
-      std::fill(header.begin() + static_cast<int64_t>(sinf.body),
-                header.begin() + static_cast<int64_t>(sinf.end), 0x00);
-      at = sinf.end;
-    }
+    restoreCodec(header, data, stbl);
   }
 
   if (samples.empty()) throw std::runtime_error("视频加密索引不可用");
@@ -393,6 +427,29 @@ Prepared prepare(const Bytes& data, const std::optional<Bytes>& key) {
     }
   }
   return Prepared{header, samples};
+}
+
+// ------------------------------------------------------------ 初始化段改写
+
+Bytes rewriteInitHeader(const Bytes& data) {
+  if (data.size() < 8) throw std::runtime_error("初始化段不完整");
+  Box moov;
+  if (!readBox(data, asInt64(readU32BE(data, 0)), static_cast<int64_t>(data.size()), moov) ||
+      moov.type != "moov") {
+    throw std::runtime_error("初始化段没有 moov");
+  }
+
+  Bytes header = data;
+  int64_t cursor = moov.body;
+  while (cursor < moov.end) {
+    Box track;
+    if (!readBox(data, cursor, moov.end, track)) break;
+    cursor = track.end;
+    if (track.type != "trak") continue;
+    Box stbl;
+    if (findBox(data, "stbl", track.body, track.end, stbl)) restoreCodec(header, data, stbl);
+  }
+  return header;
 }
 
 // ---------------------------------------------------------------- 分片解密

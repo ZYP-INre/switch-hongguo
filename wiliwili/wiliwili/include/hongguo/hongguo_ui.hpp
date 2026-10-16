@@ -34,7 +34,8 @@ class Core {
   Http& http();
 
   // 为某集开一个本地流，返回可直接喂给播放器的地址。失败抛 std::runtime_error。
-  std::string openStream(const std::string& episodeId, std::string& quality);
+  std::string openStream(const std::string& seriesId, const std::string& episodeId,
+                         std::string& quality);
   void closeStream();
 
 

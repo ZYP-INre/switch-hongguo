@@ -18,6 +18,9 @@
 #include <thread>
 #include <vector>
 
+#include <functional>
+
+#include "hongguo/dash_reader.hpp"
 #include "hongguo/http.hpp"
 #include "hongguo/stream_reader.hpp"
 
@@ -33,6 +36,10 @@ class LocalProxy {
 
   // 启动服务并返回可喂给 mpv 的地址。重复调用返回同一地址。
   std::string start(StreamReader& reader);
+
+  // DASH 模式：把两条轨合成的一条 fMP4 当普通单流喂出去。
+  // （目标机的 ffmpeg 没有 dash 解复用器，MPD 那条路走不通 —— 见 DashMuxer 的注释。）
+  std::string startMux(DashMuxer& muxer);
 
   void stop();
 
@@ -51,6 +58,13 @@ class LocalProxy {
   void acceptLoop();
   void handleConnection(int client);
 
+  // 起监听并返回端口。start / startDash 共用。
+  uint16_t bindListener();
+  // 把一条连接的请求按 [start, end] 区间吐出去。
+  void serveRange(int client, bool head, int64_t total, const std::string& contentType,
+                  std::mutex& mutex, const std::function<Bytes(int64_t, int)>& read,
+                  int64_t start, int64_t end, bool ranged);
+
   // 连接之间并发，但对 reader 的读取必须串行
   std::mutex readerMutex_;
   // 每条连接一个线程。必须由 stop() 全部 join 之后再让调用方销毁 reader ——
@@ -59,6 +73,7 @@ class LocalProxy {
   std::vector<std::thread> workers_;
 
   StreamReader* reader_ = nullptr;
+  DashMuxer* muxer_ = nullptr;
   int listenFd_ = -1;
   uint16_t port_ = 0;
   std::atomic<bool> running_{false};

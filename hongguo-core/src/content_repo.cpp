@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <regex>
 #include <set>
 
@@ -20,6 +22,32 @@ namespace {
 using Json = nlohmann::json;
 
 constexpr int kMaxPage = 100;
+
+// play-info 是网站自己的接口（不是 App 接口），签名用不上，但 UA 要像浏览器。
+constexpr const char* kWebUserAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36";
+
+// 解析 play-info 给出的闭区间文本，如 "0-1276" 或 "1657-5934"。
+// 格式不对时保持原值不动 —— 宁可后续报"区间异常"，也不要把 0 当成合法偏移。
+void parseRange(const std::string& text, int64_t& end) {
+  const size_t dash = text.find('-');
+  if (dash == std::string::npos) return;
+  try {
+    end = std::stoll(text.substr(dash + 1));
+  } catch (...) {
+  }
+}
+
+void parseRange(const std::string& text, int64_t& start, int64_t& end) {
+  const size_t dash = text.find('-');
+  if (dash == std::string::npos) return;
+  try {
+    start = std::stoll(text.substr(0, dash));
+    end = std::stoll(text.substr(dash + 1));
+  } catch (...) {
+  }
+}
 
 std::string trim(const std::string& value) {
   const size_t begin = value.find_first_not_of(" \t\r\n");
@@ -442,6 +470,21 @@ std::string ContentRepo::text(const std::string& url, const Signer::Request* sig
   }
 
   const HttpResponse response = body ? http_.post(url, headers, *body) : http_.get(url, headers);
+  if (std::getenv("HG_DEBUG")) {
+    std::fprintf(stderr, "[HG_DEBUG] %s -> HTTP %d, %zu bytes\n", url.c_str(), response.status,
+                 response.body.size());
+    for (const auto& h : response.headers) {
+      std::fprintf(stderr, "[HG_DEBUG] hdr: %s: %s\n", h.first.c_str(), h.second.c_str());
+    }
+    if (const char* dump = std::getenv("HG_DEBUG_DUMP")) {
+      if (FILE* f = std::fopen(dump, "wb")) {
+        std::fwrite(response.body.data(), 1, response.body.size(), f);
+        std::fclose(f);
+      }
+    }
+    std::fprintf(stderr, "[HG_DEBUG] body: %.600s\n",
+                 std::string(response.body.begin(), response.body.end()).c_str());
+  }
   if (response.status != 200) {
     throw std::runtime_error("内容请求失败（HTTP " + std::to_string(response.status) + "）");
   }
@@ -707,188 +750,140 @@ Detail ContentRepo::detail(const std::string& seriesId) {
 
 // ---------------------------------------------------------------- 播放解析
 
-StreamInfo ContentRepo::stream(const std::string& episodeId, int maxQuality) {
+StreamInfo ContentRepo::stream(const std::string& seriesId, const std::string& episodeId,
+                               int maxQuality) {
+  if (!isSeriesId(seriesId)) throw std::runtime_error("剧集 ID 不合法");
   if (!isSeriesId(episodeId)) throw std::runtime_error("分集 ID 不合法");
 
-  // ⚠ 2026-10-13 起，批量接口 multi_video_model 对所有请求一律返回
-  //   110001（未知异常）—— 上游 hongguoTV 的 issue #16/#17 是同一天爆的，
-  //   他们的 Node 原实现同样失败，所以不是我们的移植问题。
-  //   同一域名下的**单集接口** video_model 仍然可用，body 只要一个 video_id。
-  //   两个接口返回的结构一致（data.video_model → fallback_api），换过去即可。
-  // ⚠ 必须带 need_all_video_definition。实测同一集：
-  //     仅 video_id              → 1 档，且是 bytevc2（FFmpeg 解不了，播出来是 0/0）
-  //     +need_all_video_definition → 5 档，多出 bytevc1 等可用档位
-  const std::string payload =
-      "{\"video_id\":\"" + episodeId +
-      "\",\"biz_param\":{\"detail_page_version\":0,\"device_level\":3,"
-      "\"need_all_video_definition\":true,\"video_platform\":1024}}";
+  // ⚠ 2026-10-15 起上游把第三方客户端的播放接口整体封死了。
+  //   fqnovel 域名下的 video_model / multi_video_model 对所有请求（含合法签名）
+  //   一律返回空 200 或 110001 —— **坏签名与好签名返回完全一致**，
+  //   说明服务端在验签之前就短路了。这不是我们的移植问题，换签名/换设备指纹都没用。
+  //
+  //   现行可用的通道是网页版自己走的那条：网站域名下的 play-info。
+  //   它不需要 App 签名，但防盗链要求带上站点来源，且**同时校验剧集 ID 与分集 ID**
+  //   —— 两者不配套直接 403，所以 stream() 的签名从"只给分集"改成了"剧集 + 分集"。
+  //
+  // ⚠ 档位只认 480p / 720p，其余值（含 1080p）返回 400。
+  std::string definition = "720p";
+  if (maxQuality > 0 && maxQuality <= 480) definition = "480p";
 
+  const std::string endpoint = std::string(vendor::kSiteBase) + "/api/video/protected/play-info";
+  const std::string payload = "{\"series_id\":\"" + seriesId + "\",\"item_id\":\"" + episodeId +
+                              "\",\"definition\":\"" + definition + "\"}";
   const Bytes body(payload.begin(), payload.end());
-  const Signer::Request signedRequest =
-      signer_.sign(std::string(vendor::kSingleVideoApi), deviceValues(), body);
-  const Json data = Json::parse(text(signedRequest.url, &signedRequest));
-  const int code = jint(data, "Code", jint(data, "code", 0));
-  if (code != 0) {
-    // 把上游的原始错误带出来。"播放接口暂不可用"这种笼统说法在排查时毫无用处 ——
-    // 上游报 110001（未知异常）还是参数错误，处理方式完全不同。
-    std::string message = jstr(data, "Message");
-    if (message.empty()) message = jstr(data, "message");
-    if (message.empty()) {
-      const Json* base = jobj(data, "BaseResp");
-      if (base) message = jstr(*base, "StatusMessage");
-    }
-    throw std::runtime_error("播放接口返回错误 code=" + std::to_string(code) +
-                             (message.empty() ? "" : "（" + message + "）"));
-  }
 
-  const Json* map = jobj(data, "data");
-  if (!map) throw std::runtime_error("播放信息为空");
-
-  // 单集接口：data 本身就是模型所在的条目。
-  // 批量接口（若将来恢复）：data 是按分集 id 分层的 map。
-  const Json* entry = nullptr;
-  // 注意 video_model 是个**字符串**（里面还嵌了一层 JSON），不是对象，
-  // 所以这里不能用只认对象的 jobj 去判断。
-  if (map->is_object() && map->find("video_model") != map->end()) {
-    entry = map;
-  } else {
-    entry = jobj(*map, episodeId);
-    if (!entry) {
-      for (auto it = map->begin(); it != map->end() && !entry; ++it) {
-        if (it->is_object()) entry = &(*it);
-      }
-    }
-  }
-  if (!entry) throw std::runtime_error("播放信息为空");
-
-  Json model;
-  const Json* direct = jobj(*entry, "video_model");
-  if (direct) {
-    model = *direct;
-  } else {
-    const std::string text = jstr(*entry, "video_model");
-    if (text.empty()) throw std::runtime_error("播放信息为空");
-    model = Json::parse(text);
-  }
-
-  std::string fallback;
-  const auto raw = model.find("fallback_api");
-  if (raw != model.end()) {
-    if (raw->is_object()) {
-      fallback = jstr(*raw, "fallback_api");
-    } else if (raw->is_array() && !raw->empty()) {
-      fallback = (*raw)[0].is_string() ? (*raw)[0].get<std::string>() : "";
-    } else if (raw->is_string()) {
-      const std::string text = raw->get<std::string>();
-      try {
-        fallback = jstr(Json::parse(text), "fallback_api");
-      } catch (...) {
-        fallback = text;
-      }
-    }
-  }
-  if (fallback.rfind("https://", 0) != 0) throw std::runtime_error("播放地址格式异常");
-
-  const Json infoRoot = Json::parse(text(fallback, nullptr));
-  const Json* videoInfo = jobj(infoRoot, "video_info");
-  const Json* info = videoInfo ? jobj(*videoInfo, "data") : nullptr;
-  if (!info) throw std::runtime_error("没有播放资源");
-
-  const Json* videoList = jobj(*info, "video_list");
-  if (!videoList) throw std::runtime_error("没有可用清晰度");
-
-  struct Candidate {
-    int quality = 0;
-    std::string key;
-    const Json* item = nullptr;
+  const HeaderList headers = {
+      {"Origin", std::string(vendor::kSiteBase)},
+      {"Referer", std::string(vendor::kSiteBase) + "/player/" + seriesId + "/" + episodeId},
+      {"User-Agent", kWebUserAgent},
+      {"Content-Type", "application/json"},
   };
-  // 分两档收集：
-  //   rows     —— 首选（排除了 bytevc2，那类资源在标准 MP4 解复用器下只有音频没有视频轨）
-  //   fallback —— 兜底（任何有 main_url 的都算）
-  // 首选为空时用兜底，而不是直接报错。上游返回的资源组合是变化的，
-  // 「全都被排除掉」这种情况真的会出现，不该让用户看到失败。
-  std::vector<Candidate> rows;
-  std::vector<Candidate> fallbackRows;
-  size_t total = 0;
-  size_t noUrl = 0;
-  size_t badCodec = 0;
-
-  for (auto it = videoList->begin(); it != videoList->end(); ++it) {
-    if (!it->is_object()) continue;
-    ++total;
-
-    const std::string mainUrl = jstr(*it, "main_url");
-    if (mainUrl.empty()) {
-      ++noUrl;
-      continue;
+  HttpResponse response;
+  // 调试钩子：把一份保存好的 play-info 响应喂进来，避免反复打上游 ——
+  // 这个接口按 IP 限流，密集调试时会被 403，根本走不到解析这一步。
+  // 正式路径下这个变量不设，一行都不影响。
+  if (const char* replay = std::getenv("HG_PLAY_INFO_FILE")) {
+    std::FILE* file = std::fopen(replay, "rb");
+    if (!file) throw std::runtime_error("无法打开 HG_PLAY_INFO_FILE");
+    Bytes blob;
+    char buffer[8192];
+    size_t got = 0;
+    while ((got = std::fread(buffer, 1, sizeof(buffer), file)) > 0) {
+      blob.insert(blob.end(), buffer, buffer + got);
     }
-    const std::string codec = [&] {
-      std::string value = jstr(*it, "codec_type");
-      for (char& ch : value) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-      return value;
-    }();
-    const bool bytevc2 = (codec == "bytevc2" || codec == "bvc2");
-    if (bytevc2) ++badCodec;
-
-    std::string label = jstr(*it, "quality_desc");
-    if (label.empty()) label = jstr(*it, "height");
-    if (label.empty()) label = jstr(*it, "vheight");
-    if (label.empty()) label = jstr(*it, "quality");
-    if (label.empty()) label = it.key();
-
-    Candidate candidate{qualityNumber(label), it.key(), &(*it)};
-    fallbackRows.push_back(candidate);
-    if (!bytevc2) rows.push_back(candidate);
-  }
-
-  // ⚠ 不回退到 bytevc2。
-  //   bytevc2 在容器里完全合法（所以大小、时长都读得出来），
-  //   但 FFmpeg/mpv 没有对应解码器 —— 选它的结果就是"有画面框但 0/0 不播"。
-  //   宁可明确报错，也不要静默选一个放不了的编码
-  //   （实测：用了 ffprobe 才看出来是 "unknown codec (bvc2)"）。
-  (void)fallbackRows;
-  // 清晰度降序；同档时按键名升序，保证结果可复现
-  std::sort(rows.begin(), rows.end(), [](const Candidate& a, const Candidate& b) {
-    if (a.quality != b.quality) return a.quality > b.quality;
-    return a.key < b.key;
-  });
-
-  const Candidate* selected = nullptr;
-  for (const Candidate& candidate : rows) {
-    if (candidate.quality > 0 && candidate.quality <= maxQuality) {
-      selected = &candidate;
-      break;
+    std::fclose(file);
+    response.status = 200;
+    response.body = std::move(blob);
+  } else {
+    response = http_.post(endpoint, headers, body);
+    // 同理：把成功的响应落盘，供后续离线调试与回归使用。
+    if (response.status == 200) {
+      if (const char* save = std::getenv("HG_PLAY_INFO_SAVE")) {
+        if (std::FILE* out = std::fopen(save, "wb")) {
+          std::fwrite(response.body.data(), 1, response.body.size(), out);
+          std::fclose(out);
+        }
+      }
     }
   }
-  if (!selected && !rows.empty()) selected = &rows.back();
-  if (!selected) {
-    // 报错要能看出是"上游没给"还是"给了但都被过滤了"
-    throw std::runtime_error(
-        "没有可播放的清晰度（上游返回 " + std::to_string(total) + " 档：无地址 " +
-        std::to_string(noUrl) + "，bytevc2 " + std::to_string(badCodec) + "）");
+
+  // 403 / 400 的响应体是 {"error":"..."}，原样带出来 —— "播放接口暂不可用"
+  // 这种笼统说法在排查时毫无用处，加密资源不可用与参数错误处理方式完全不同。
+  if (response.status != 200) {
+    std::string reason;
+    try {
+      const Json err = Json::parse(std::string(response.body.begin(), response.body.end()));
+      reason = jstr(err, "error");
+    } catch (...) {
+    }
+    throw std::runtime_error("播放接口不可用（HTTP " + std::to_string(response.status) +
+                             (reason.empty() ? "" : "：" + reason) + "）");
   }
 
-  std::string url = cleanUrl(jstr(*selected->item, "main_url"));
-  const std::string seedText = jstr(*info, "key_seed");
-  if (!seedText.empty()) {
-    url = media_crypto::decryptUrl(url, fromBase64(seedText));
+  const Json root = Json::parse(std::string(response.body.begin(), response.body.end()));
+  const Json* resp = jobj(root, "base_resp");
+  const int code = resp ? jint(*resp, "StatusCode") : 0;
+  if (code != 0) {
+    throw std::runtime_error("播放接口返回错误 code=" + std::to_string(code) +
+                             (resp ? "（" + jstr(*resp, "StatusMessage") + "）" : ""));
   }
-  if (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0) {
-    throw std::runtime_error("播放地址无效");
-  }
+
+  const Json* info = jobj(root, "play_info");
+  if (!info) throw std::runtime_error("播放信息为空");
+
+  // 视频在外层，音频嵌在 audio 里，两者结构相同。
+  const auto parseTrack = [](const Json& source) {
+    DashTrack track;
+    track.url = jstr(source, "main_url");
+    track.backupUrl = jstr(source, "backup_url");
+    track.codecType = jstr(source, "codec_type");
+    const std::string total = jstr(source, "size");
+    if (!total.empty()) {
+      try {
+        track.total = std::stoll(total);
+      } catch (...) {
+        track.total = 0;
+      }
+    }
+    const std::string duration = jstr(source, "duration");
+    if (!duration.empty()) {
+      try {
+        track.duration = std::stod(duration);
+      } catch (...) {
+        track.duration = 0;
+      }
+    }
+    const std::string bandwidth = jstr(source, "bandwidth");
+    if (!bandwidth.empty()) {
+      try {
+        track.bandwidth = std::stoll(bandwidth);
+      } catch (...) {
+        track.bandwidth = 0;
+      }
+    }
+    track.width = jint(source, "width");
+    track.height = jint(source, "height");
+    parseRange(jstr(source, "init_range"), track.initEnd);
+    parseRange(jstr(source, "index_range"), track.indexStart, track.indexEnd);
+    int64_t firstMoofEnd = 0;
+    parseRange(jstr(source, "first_moof_range"), track.firstMoof, firstMoofEnd);
+    return track;
+  };
 
   StreamInfo out;
-  out.url = std::move(url);
   out.episodeId = episodeId;
-  const std::string spade = jstr(*selected->item, "spade_a");
-  out.rawKey = spade;
-  if (!spade.empty()) out.key = media_crypto::deriveKey(spade);
-  if (selected->quality > 0) {
-    out.quality = std::to_string(selected->quality) + "P";
-    if (selected->quality > maxQuality) out.quality += "（兼容资源）";
-  } else {
-    out.quality = "自动";
-  }
+  out.dash = true;
+  out.video = parseTrack(*info);
+  if (const Json* audio = jobj(*info, "audio")) out.audio = parseTrack(*audio);
+  if (out.video.url.empty()) throw std::runtime_error("播放地址为空");
+
+  const std::string definitionText = jstr(*info, "definition");
+  out.quality = definitionText.empty() ? "自动" : definitionText;
+
+  const std::string accessKey = jstr(*info, "player_access_key");
+  out.rawKey = accessKey;
+  if (!accessKey.empty()) out.key = media_crypto::deriveAccessKey(accessKey);
   return out;
 }
 

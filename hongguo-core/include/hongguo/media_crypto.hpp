@@ -35,6 +35,22 @@ struct Prepared {
 // spade_a → 16 字节内容密钥。
 Bytes deriveKey(const std::string& value);
 
+// player_access_key → 16 字节内容密钥。
+//
+// ⚠ 这是 2026-10-15 起上游换用的**新播放通道**（hongguoduanju.com 的
+//   /api/video/protected/play-info）所用的密钥形态，与旧 spade_a（deriveKey）不是
+//   同一个值，但同族：都是"长度取决于头三字节异或 + 两个交替种子逐字节混淆"。
+//   两处差异（照站点内嵌的 aw.wasm 逐字节对拍确认）：
+//     1. 种子 b 是 250（旧版 246）
+//     2. 末步是 (x ^ prev) + popcount(i) + 21（旧版是 -21 - popcount(i) + (x ^ prev)）
+//   work[1..33] 出来必须是 32 个十六进制字符，否则说明上游又改版了。
+Bytes deriveAccessKey(const std::string& value);
+
+// 只改写初始化段（ftyp + moov）：还原原始编码格式、抹掉 sinf，不建样本索引。
+// 分片式（fMP4 / DASH）用这个 —— 样本索引在 moof 里，不在 stbl。
+// 返回字节数与输入相同：偏移必须保持稳定。
+Bytes rewriteInitHeader(const Bytes& data);
+
 // key_seed 解密播放地址。失败抛 std::runtime_error。
 std::string decryptUrl(const std::string& value, const Bytes& seed);
 
