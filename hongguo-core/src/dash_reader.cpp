@@ -105,6 +105,12 @@ Bytes DashTrackReader::fetch(int64_t start, int64_t end) const {
        "Chrome/131.0.0.0 Safari/537.36"},
   };
   const HttpResponse response = http_.getRange(track_.url, headers, start, end);
+  if (std::getenv("HG_DASH_DEBUG")) {
+    std::fprintf(stderr, "[dash-fetch] %s range=%lld-%lld http=%d body=%zu ctype=%s clen=%s\n",
+                 track_.url.substr(track_.url.size() - 20).c_str(), (long long)start, (long long)end,
+                 response.status, response.body.size(),
+                 response.header("Content-Type").c_str(), response.header("Content-Length").c_str());
+  }
   if (response.status != 200 && response.status != 206) {
     throw std::runtime_error("分片请求失败（HTTP " + std::to_string(response.status) + "）");
   }
@@ -121,8 +127,28 @@ void DashTrackReader::prepare() {
   parseIndex();
 }
 
+const std::vector<DashTrackReader::EncryptedRun>& DashTrackReader::runsFor(size_t index) const {
+  if (runCache_.size() < segments_.size()) {
+    runCache_.resize(segments_.size());
+    runReady_.assign(segments_.size(), 0);
+  }
+  if (runReady_[index]) return runCache_[index];
+
+  // ⚠ 先把 moof 拉回来解析完，再放进缓存 —— parseRuns 会抛异常（截断、缺 box 等），
+  //   万一失败，runReady_ 还是 0，下次重试即可，不会把一个半成品当成功缓存住。
+  std::vector<EncryptedRun> runs = parseRuns(segments_[index]);
+  runCache_[index] = std::move(runs);
+  runReady_[index] = 1;
+  return runCache_[index];
+}
+
 void DashTrackReader::parseIndex() {
   segments_.clear();
+  // 索引重建了，跟着它走的缓存也要一起丢 —— prepare() 是可重复调用的。
+  runCache_.clear();
+  runReady_.clear();
+  window_.clear();
+  windowStart_ = 0;
   if (track_.indexEnd <= track_.indexStart) {
     // 没有索引段：退化成"从首个 moof 一路扫下去"，交给 runsFor 按需解析。
     if (track_.firstMoof > 0) {
@@ -178,7 +204,7 @@ void DashTrackReader::parseIndex() {
   if (segments_.empty()) throw std::runtime_error("分片索引为空");
 }
 
-std::vector<DashTrackReader::EncryptedRun> DashTrackReader::runsFor(
+std::vector<DashTrackReader::EncryptedRun> DashTrackReader::parseRuns(
     const Segment& segment) const {
   // moof 在分片开头。先读 16 字节拿它的长度，再整段取回来 ——
   // 分片表（trun/senc）可能有几 KB，猜一个固定长度容易截断。
@@ -337,6 +363,48 @@ Bytes DashTrackReader::read(int64_t start, int length) {
   const int64_t end = std::min<int64_t>(start + length, track_.total);
   if (end <= start) return {};
 
+  std::lock_guard<std::mutex> guard(mutex_);
+
+  // 窗口命中就直接切一段给出去；没命中（第一次读、跳读、跳回来）就重新拉一个窗口。
+  // 窗口按"至少 kWindowBytes"取，所以播放器那 128KB 一跳的读法，
+  // 平均每两跳才真正打一次 CDN。
+  //
+  // ⚠ 判据是"**整段**都在窗口里"，不是"起点在窗口里"。
+  //   两者差在跨窗口边界的那一次读上：只判起点的话它会只切回半截 ——
+  //   而调用方（DashMuxer::read）是按分片长度去填缓冲区的，拿到半截就在后面补
+  //   0x00，输出里就出现一块块静音的零字节。要命的是这种文件 ffprobe/ffmpeg 都
+  //   不报错，只是画面偶发花一下。所以宁可多拉一次窗口，也不能返回不足量。
+  const int64_t windowEnd = windowStart_ + static_cast<int64_t>(window_.size());
+  const bool covered = start >= windowStart_ && end <= windowEnd;
+  if (!covered) {
+    const int64_t span = std::max<int64_t>(kWindowBytes, end - start);
+    window_ = plainRange(start, std::min<int64_t>(start + span, track_.total));
+    windowStart_ = start;
+  }
+
+  const int64_t from = start - windowStart_;
+  if (from >= static_cast<int64_t>(window_.size())) return {};
+  // 正常情况到这里一定够长（covered 已经保证了）。留着这个下限是兜底：
+  // 万一 CDN 对某个区间回了不足量，也只是这一次读短了，不会越界读。
+  const int64_t take = std::min<int64_t>(static_cast<int64_t>(window_.size()) - from, end - start);
+  if (take < end - start && std::getenv("HG_DASH_DEBUG")) {
+    std::fprintf(stderr, "[dash] 读不足量 at=%lld 要 %lld 只拿到 %lld（窗口 [%lld,+%lld)）\n",
+                 (long long)start, (long long)(end - start), (long long)take,
+                 (long long)windowStart_, (long long)window_.size());
+  }
+  return Bytes(window_.begin() + static_cast<int64_t>(from),
+               window_.begin() + static_cast<int64_t>(from) + take);
+}
+
+Bytes DashTrackReader::probe(int64_t start, int length) const {
+  if (start < 0 || length <= 0) return {};
+  std::lock_guard<std::mutex> guard(mutex_);
+  return plainRange(start, std::min<int64_t>(start + length, track_.total));
+}
+
+Bytes DashTrackReader::plainRange(int64_t start, int64_t end) const {
+  if (end <= start) return {};
+
   // ⚠ 先把请求区间**整段**取回来，再就地把加密段换成明文。
   //   只写"解出来的那几段"是不够的 —— 分片里有大量本来就不加密的字节
   //   （moof、mdat 头、子样本的明文段、尾部填充），漏掉它们文件就是一堆空洞。
@@ -353,12 +421,12 @@ Bytes DashTrackReader::read(int64_t start, int length) {
 
   if (!hasKey()) return out;
 
-  for (const Segment& segment : segments_) {
+  for (size_t index = 0; index < segments_.size(); ++index) {
+    const Segment& segment = segments_[index];
     const int64_t segmentEnd = segment.start + segment.size;
     if (segmentEnd <= start || segment.start >= end) continue;
 
-    const std::vector<EncryptedRun> runs = runsFor(segment);
-    for (const EncryptedRun& run : runs) {
+    for (const EncryptedRun& run : runsFor(index)) {
       const int64_t begin = std::max<int64_t>(start, run.start);
       const int64_t stop = std::min<int64_t>(end, run.end);
       if (begin >= stop) continue;
@@ -570,9 +638,20 @@ void DashMuxer::prepare() {
       piece.sourceOffset = aSegments[i].start;
       // 音频分片的 tfhd 里写着 track_ID，要改成改名后的那个。
       // 偏移在这里就扫出来 —— read() 拿到的可能只是分片中间的一小段。
-      const Bytes headBytes = audio_->read(aSegments[i].start, 512);
+      // ⚠ 这里必须用 probe 而不是 read：read 会顺手预取一整个 256KB 的窗口，
+      //   35 个分片扫下来就是白拉 9MB —— 而这里要的只有开头 512 字节。
+      const Bytes headBytes = audio_->probe(aSegments[i].start, 512);
       const int64_t found = findIn(headBytes, "tfhd");
-      if (found >= 0) piece.patchAt = aSegments[i].start + found + 12;
+      // ⚠ findIn 返回的是 box **类型串** 的首字节下标（即 box 起点 + 4），不是 box 起点。
+      //   track_ID 在 box 起点 + 12，也就是这里的 found + 8。写成 found + 12 会往后
+      //   多走 4 字节、落到下一个字段上 —— 红果音频分片的 tfhd 是 flags=0x020008
+      //   （default-base-is-moof + default_sample_duration），那一格正好是
+      //   default_sample_duration。而音频的 trun 只有 sample_size、没有 per-sample
+      //   duration，ffmpeg 只能取这个默认值 —— 于是每个音频样本的时长从 1024 变成
+      //   写进去的 track_ID(2)，44100 时间基下从 23.2ms 变成 45µs，整条音轨的时间轴
+      //   被压缩 512 倍，音画严重不同步；播放器拿它当主时钟还会疯狂丢视频帧。
+      //   这个错误**不报解码错**，只坏时间戳，所以"整集解码 0 错误"的验收放它过去了。
+      if (found >= 0) piece.patchAt = aSegments[i].start + found + 8;
       pieces_.push_back(piece);
       total_ += piece.length;
     }

@@ -61,8 +61,12 @@ class LocalProxy {
   // 起监听并返回端口。start / startDash 共用。
   uint16_t bindListener();
   // 把一条连接的请求按 [start, end] 区间吐出去。
+  //
+  // ⚠ mutex 可以为 nullptr：合成模式下音频与视频是**两条独立**的轨，各自有缓存、
+  //   各自上锁，音视频读因此能真正并行；再套一把全局锁只会让它们互相排队。
+  //   单流模式（StreamReader）没有内部锁，仍然必须传 &readerMutex_。
   void serveRange(int client, bool head, int64_t total, const std::string& contentType,
-                  std::mutex& mutex, const std::function<Bytes(int64_t, int)>& read,
+                  std::mutex* mutex, const std::function<Bytes(int64_t, int)>& read,
                   int64_t start, int64_t end, bool ranged);
 
   // 连接之间并发，但对 reader 的读取必须串行

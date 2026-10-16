@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,6 +33,10 @@ class DashTrackReader {
 
   // 读取 [start, start+length) 的明文。越界时按到文件末尾截断。
   Bytes read(int64_t start, int length);
+
+  // 取一小段明文，**不经过顺序读窗口**。给"只看几百字节头部字段"的探测用：
+  // 合成器扫每个分片开头的 tfhd 就是这种场景，走 read() 会为 512 字节白白拉回一个窗口。
+  Bytes probe(int64_t start, int length) const;
 
   int64_t total() const { return track_.total; }
   const DashTrack& track() const { return track_; }
@@ -63,7 +68,15 @@ class DashTrackReader {
 
   Bytes fetch(int64_t start, int64_t end) const;
   void parseIndex();
-  std::vector<EncryptedRun> runsFor(const Segment& segment) const;
+  // 解析某个分片的加密区间（原来的 runsFor 本体，不带缓存）。
+  std::vector<EncryptedRun> parseRuns(const Segment& segment) const;
+  // 带缓存的分片表查询。播放器是逐段顺序读的，同一个分片会被读很多次
+  // （代理一次只吐 128KB，而一个 5 秒分片有一两 MB）—— 不带缓存的话，
+  // 每读一次都要把这份几 KB 的 moof 重新从 CDN 拉一遍，白费一次往返。
+  const std::vector<EncryptedRun>& runsFor(size_t index) const;
+  // 取一段**明文**（已还原编码格式、已就地解密），与远端 [start, end) 一一对应。
+  // read() 的窗口缓存底层就是它。
+  Bytes plainRange(int64_t start, int64_t end) const;
 
   Http& http_;
   DashTrack track_;
@@ -71,6 +84,25 @@ class DashTrackReader {
   Bytes header_;
   std::vector<Segment> segments_;
   int64_t timescale_ = 0;
+
+  // ⚠ 视频与音频两条轨在代理里是**并行**读的，而这里现在自带缓存，
+  //   所以读路径必须自己上锁 —— 不能再指望调用方那把锁（合成模式下已经没有全局锁了）。
+  mutable std::mutex mutex_;
+  mutable std::vector<std::vector<EncryptedRun>> runCache_;
+  mutable std::vector<char> runReady_;
+
+  // 顺序读窗口，单位字节。
+  //
+  // 以前每收一个 128KB 的 Range 就去 CDN 拉一次 —— 一集 175 秒的片子要拉两百多次，
+  // 时间全花在"等下一个往返"上（实测整集吞吐只有 400KB/s 上下，而 CDN 直连是它的十几倍）。
+  // 现在一次多拉一点、按窗口留着：请求数直接降一个量级。
+  //
+  // ⚠ 窗口不能太大。首字节要等这一整块拉回来才发得出去，而 local_proxy 里
+  //   kChunkSize 那段注释记着同一个取舍：CDN 慢的时候，块越大越容易把播放器等超时。
+  //   256KB 是"请求数减半"与"首字节别超过一两秒"之间的折中。
+  static constexpr int64_t kWindowBytes = 256 * 1024;
+  mutable Bytes window_;
+  mutable int64_t windowStart_ = 0;
 };
 
 // 把一集的两条 DASH 轨合成**一条**普通 fMP4。

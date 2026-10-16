@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <mutex>
+#include <optional>
 #include <vector>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +30,10 @@ namespace {
 //
 // 用 128KB：前两块正好命中 prepare() 预取的 256KB 前缀缓存，**立刻就能发出去**，
 // 之后每块只需拉 128KB，远低于超时阈值。连接已复用，多几次请求的代价可以接受。
+//
+// 请求数由 DashTrackReader 那层顺序读窗口负责压下来（见 dash_reader.hpp 的
+// kWindowBytes）—— 它一次拉 256KB，所以这里虽然还是 128KB 一跳，实际每两跳
+// 才真正打一次 CDN。首字节的等待没有变长，因为那一层拉的就是这 128KB 所在的窗口。
 constexpr size_t kChunkSize = 128 * 1024;
 
 // 返回 false 表示对端已经断开。
@@ -299,7 +304,8 @@ void LocalProxy::handleConnection(int client) {
                            std::to_string(body.size()) + "\r\n\r\n" + body);
       return;
     }
-    serveRange(client, head, total, "video/mp4", readerMutex_,
+    // 合成模式不传锁：两条轨各自上锁，音视频读可以并行（见 serveRange 的注释）。
+    serveRange(client, head, total, "video/mp4", nullptr,
                [this](int64_t at, int count) { return muxer_->read(at, count); }, start, end,
                !rangeValue.empty());
     return;
@@ -326,13 +332,13 @@ void LocalProxy::handleConnection(int client) {
                          std::to_string(body.size()) + "\r\n\r\n" + body);
     return;
   }
-  serveRange(client, head, total, "video/mp4", readerMutex_,
+  serveRange(client, head, total, "video/mp4", &readerMutex_,
              [this](int64_t at, int count) { return reader_->read(at, count); }, start, end,
              ranged);
 }
 
 void LocalProxy::serveRange(int client, bool head, int64_t total, const std::string& contentType,
-                            std::mutex& mutex,
+                            std::mutex* mutex,
                             const std::function<Bytes(int64_t, int)>& read, int64_t start,
                             int64_t end, bool ranged) {
   const int64_t length = end - start + 1;
@@ -353,9 +359,11 @@ void LocalProxy::serveRange(int client, bool head, int64_t total, const std::str
     const int chunk = static_cast<int>(std::min<int64_t>(kChunkSize, end - at + 1));
     Bytes piece;
     {
-      // 读动作串行：StreamReader 有前缀缓存与共享连接，多线程同时读会互相踩。
-      // DASH 的两条轨各用各的锁，视频与音频可以真正并行。
-      std::lock_guard<std::mutex> guard(mutex);
+      // 单流模式：StreamReader 有前缀缓存与共享连接，多线程同时读会互相踩，
+      // 必须由这里串行。合成模式传的是 nullptr —— DashTrackReader 自带锁与缓存，
+      // 视频与音频各读各的，能真正并行。
+      std::optional<std::lock_guard<std::mutex>> guard;
+      if (mutex != nullptr) guard.emplace(*mutex);
       piece = read(at, chunk);
     }
     if (piece.empty()) {
