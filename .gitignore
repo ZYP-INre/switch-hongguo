@@ -25,6 +25,12 @@ lib-tree.json
 top-tree.json
 lib-tree.json
 
+# ---- 编辑器/语言服务器缓存 ----
+# clangd 的索引每次构建都会重写，进了版本库就是纯噪声：
+# diff 里全是二进制块，真正改了什么都看不出来。初次提交时误纳过一批。
+.cache/
+**/.cache/clangd/
+
 # ---- 工具与临时目录 ----
 .superpowers/
 .runtime/
